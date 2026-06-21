@@ -1,0 +1,78 @@
+                            +-------------------+
+                            |      Clients      |
+                            | Web / Mobile App  |
+                            +---------+---------+
+                                      |
+                                      v
+                         +-------------------------+
+                         |       API Gateway       |
+                         | Authentication          |
+                         | Rate Limiting           |
+                         | Routing                |
+                         +-----------+-------------+
+                                     |
+                 +-------------------+-------------------+
+                 |                   |                   |
+                 v                   v                   v
+
+      +----------------+  +----------------+  +----------------+
+      | User Service   |  | Catalog Service|  | Order Service  |
+      +----------------+  +----------------+  +----------------+
+                |                    |                    |
+                |                    |                    |
+                +---------+----------+---------+----------+
+                          |                    |
+                          v                    v
+
+                  +----------------+  +----------------+
+                  | Payment Service|  | Inventory Svc |
+                  +----------------+  +----------------+
+
+                           |
+                           v
+
+                   +-------------------+
+                   | Notification Svc  |
+                   +-------------------+
+
+                           |
+                           v
+
+                +------------------------+
+                | Service Discovery      |
+                | Circuit Breakers       |
+                | Config Server          |
+                +------------------------+
+
+                           |
+                           v
+
+                     Kafka / RabbitMQ
+
+
+ --------------------------------------------------------------------------------------------
+
+ Maven Structure:
+ ecommerce-platform
+ │
+ ├── common-lib
+ │
+ ├── api-gateway
+ │
+ ├── service-discovery
+ │
+ ├── config-server
+ │
+ ├── user-service
+ │
+ ├── catalog-service
+ │
+ ├── inventory-service
+ │
+ ├── order-service
+ │
+ ├── payment-service
+ │
+ ├── notification-service
+ │
+ └── docker
