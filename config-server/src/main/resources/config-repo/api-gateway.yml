@@ -4,8 +4,20 @@ server:
 spring:
   cloud:
     gateway:
+      discovery:
+        locator:
+          enabled: true
       routes:
         - id: order-service
-          uri: http://localhost:8082
+          uri: lb://ORDER-SERVICE
           predicates:
             - Path=/order/**
+
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: http://localhost:8086/eureka/
+
+

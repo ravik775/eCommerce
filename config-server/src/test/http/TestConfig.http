@@ -1,4 +1,8 @@
 GET http://localhost:8888/service-discovery/default
 
 ###
-GET http://localhost:8082/
+GET http://localhost:8888/order-service/default
+
+
+###
+GET http://localhost:8888/api-gateway/default

@@ -1,1 +1,8 @@
 GET http://localhost:8082/
+
+###
+GET http://localhost:8080/order/
+
+
+###
+GET lb:/ORDER-SERVICE/
