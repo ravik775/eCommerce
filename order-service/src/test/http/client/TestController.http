@@ -1,8 +1,17 @@
-GET http://localhost:8082/
+GET http://localhost:8082/?arg=direct
+###
+GET http://192.168.1.6:8082/?arg=aa
+###
+GET http://localhost:8090/order/?arg=aa
 
 ###
-GET http://localhost:8080/order/
-
+GET http://192.168.1.6:8082/order/?arg=aa
 
 ###
 GET lb:/ORDER-SERVICE/
+
+###
+GET http://localhost:8080/actuator/gateway/routes
+
+###
+GET http://localhost:8888/api-gateway/default
