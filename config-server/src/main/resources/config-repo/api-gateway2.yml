@@ -12,35 +12,52 @@ spring:
   cloud:
     gateway:
       default-filters:
+        - name: CircuitBreaker
+          args:
+            name: globalCircuit
+            fallbackUri: forward:/fallback/global
         - name: Retry
           args:
             retries: 3
-            methods:
-              - GET
             statuses:
               - BAD_GATEWAY
               - SERVICE_UNAVAILABLE
               - GATEWAY_TIMEOUT
-
       routes:
         - id: order-service
           uri: lb://ORDER-SERVICE
           predicates:
             - Path=/order/**,/order
-
           filters:
             - StripPrefix=1
-
             - name: CircuitBreaker
               args:
-                name: orderCircuit
-                fallbackUri: forward:/fallback/order
+               name: orderCircuit
+               fallbackUri: forward:/fallback/order
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+            - name: Retry
+              args:
+                retries: 1
+                statuses:
+                  - BAD_GATEWAY
+                  - SERVICE_UNAVAILABLE
+                  - GATEWAY_TIMEOUT
+                methods:
+                  GET
 
 management:
   endpoints:
     web:
       exposure:
         include: "*"
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
 
 logging:
   level:
