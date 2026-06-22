@@ -1,0 +1,4 @@
+GET http://localhost:8888/service-discovery/default
+
+###
+GET http://localhost:8082/

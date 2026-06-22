@@ -5,7 +5,7 @@ spring:
   cloud:
     gateway:
       routes:
-        - id: user-service
-          uri: lb://USER-SERVICE
+        - id: order-service
+          uri: http://localhost:8082
           predicates:
-            - Path=/users/**
+            - Path=/order/**
