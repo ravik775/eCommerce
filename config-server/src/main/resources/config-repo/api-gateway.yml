@@ -8,4 +8,26 @@ eureka:
     service-url:
       defaultZone: http://localhost:8086/eureka/
 
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: order-service
+          uri: lb://ORDER-SERVICE
+          predicates:
+            - Path=/order/**,/order
+          filters:
+            - StripPrefix=1
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    org.springframework.cloud.gateway.route.RouteDefinitionRouteLocator: TRACE
+    org.springframework.cloud.loadbalancer: TRACE
+    reactor.netty.http.client: DEBUG
