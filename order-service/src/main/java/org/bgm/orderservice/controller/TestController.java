@@ -10,6 +10,8 @@ public class TestController {
    @GetMapping("/")
     String hello(@RequestParam("arg") String arg){
 
+       if(arg.contains("fail"))
+           throw new RuntimeException("Fail due to arg");
        System.out.println("Arg: "+arg);
        return "Hello";
    }
