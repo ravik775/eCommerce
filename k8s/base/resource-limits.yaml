@@ -1,0 +1,38 @@
+# Namespace-level guardrails, added after a real incident: the local
+# Docker Desktop VM ran out of resources with 13 Compose containers +
+# 12 K8s pods running simultaneously with zero resource limits anywhere,
+# hanging the Docker engine itself. Every container below also gets its
+# own explicit resources.requests/limits (not relying on LimitRange
+# defaults alone) — this ResourceQuota is the namespace-wide ceiling on
+# top of that, and the LimitRange is a safety net for any container spec
+# that forgets to set its own.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ecom-quota
+  namespace: ecom
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 8Gi
+    pods: "30"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: ecom-default-limits
+  namespace: ecom
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 250m
+        memory: 256Mi
+      max:
+        cpu: "1"
+        memory: 1Gi

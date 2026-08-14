@@ -1,0 +1,18 @@
+# SPIRE runs in its own namespace, separate from `ecom` — it's platform
+# identity infrastructure (cluster-scoped RBAC to attest Pods/Nodes),
+# not an application workload, matching the standard SPIRE-on-Kubernetes
+# deployment pattern (spiffe/spire-tutorials).
+#
+# PSS level is "privileged" here, deliberately NOT "restricted" like
+# `ecom` (ADR-0020): the SPIRE agent DaemonSet requires a hostPath volume
+# to expose the Workload API Unix socket at a node-level path every app
+# pod on that node can mount — hostPath volumes are disallowed under both
+# "baseline" and "restricted" PSS, so app-namespace-level hardening simply
+# doesn't apply to this specific, standard SPIRE requirement. `ecom`
+# itself is unaffected — its "restricted" enforcement is unchanged.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

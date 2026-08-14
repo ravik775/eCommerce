@@ -1,0 +1,188 @@
+# SPIRE server: issues SVIDs after verifying node/workload attestation.
+# Single instance (matches this project's "no new infra before it's
+# needed" bias — ADR-0002/0022/0027/0029) with a local SQLite datastore
+# on a PVC. Trust domain "ecommerce.local" — arbitrary but must match
+# every agent/registration entry consistently.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+  namespace: spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server-trust-role
+rules:
+  # k8s_psat node attestor needs to validate the agent's projected
+  # ServiceAccount token and look up the Node it came from.
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server-trust-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: spire-server-trust-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# spire-bundle ConfigMap is deliberately NOT declared here as a regular
+# kustomize-managed resource. The k8sbundle notifier plugin PATCHES this
+# ConfigMap's data on every trust-bundle load/rotation — it must exist
+# before spire-server's first successful bundle-load event (crash-loops
+# with "configmaps \"spire-bundle\" not found" otherwise), but if it's
+# *also* declared here with placeholder empty data, every subsequent
+# `kubectl apply -f`/`-k` resets it back to empty, wiping spire-server's
+# real published bundle and starving every agent's wait-for-bundle init
+# container — found live, repeatedly, while iterating on this file.
+# One-time bootstrap step (documented, not silently worked around):
+#   kubectl create configmap spire-bundle -n spire --from-literal=bundle.crt=""
+# Run once before the first `kubectl apply -k k8s/base/spire`; never
+# re-run it or re-add this ConfigMap to a kustomize resource list.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server-config
+  namespace: spire
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      trust_domain = "ecommerce.local"
+      data_dir = "/run/spire/data"
+      log_level = "INFO"
+      ca_subject = {
+        country = ["US"],
+        organization = ["ecommerce-local-dev"],
+        common_name = "",
+      }
+    }
+
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "docker-desktop" = {
+              service_account_allow_list = ["spire:spire-agent"]
+            }
+          }
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/run/spire/data/keys.json"
+        }
+      }
+
+      Notifier "k8sbundle" {
+        plugin_data {
+          # Publishes the trust bundle into a ConfigMap so workloads /
+          # the CSI driver can verify server identity without an
+          # out-of-band bootstrap step.
+          namespace = "spire"
+          config_map = "spire-bundle"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spire-server
+  namespace: spire
+spec:
+  serviceName: spire-server
+  replicas: 1
+  selector:
+    matchLabels: { app: spire-server }
+  template:
+    metadata:
+      labels: { app: spire-server }
+    spec:
+      serviceAccountName: spire-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.11.0
+          args: ["-config", "/run/spire/config/server.conf"]
+          ports:
+            - { containerPort: 8081 }
+          volumeMounts:
+            - { name: spire-config, mountPath: /run/spire/config, readOnly: true }
+            - { name: spire-data, mountPath: /run/spire/data }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 300m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            tcpSocket: { port: 8081 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - { name: spire-config, configMap: { name: spire-server-config } }
+  volumeClaimTemplates:
+    - metadata: { name: spire-data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: spire
+spec:
+  selector: { app: spire-server }
+  ports: [{ port: 8081, targetPort: 8081 }]
+---
+# spire-server RBAC to write the k8sbundle ConfigMap it publishes to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-server-bundle-writer
+  namespace: spire
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "patch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-server-bundle-writer-binding
+  namespace: spire
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: spire
+roleRef:
+  kind: Role
+  name: spire-server-bundle-writer
+  apiGroup: rbac.authorization.k8s.io

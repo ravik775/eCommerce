@@ -1,0 +1,28 @@
+# Check container status and health state
+docker compose ps weather-app
+
+# Inspect precise healthcheck logs and output
+docker inspect --format='{{json .State.Health}}' $(docker compose ps -q weather-app) | jq
+
+# View live trailing logs for a service
+docker compose logs -f weather-app
+
+docker compose up -d --no-deps --build weather-app
+
+# Send immediate SIGKILL via Docker Compose
+docker compose kill weather-app
+
+# Alternatively, force-stop using raw container ID/name
+docker stop -t 0 $(docker compose ps -q weather-app)
+
+# Open an interactive shell inside a running container
+docker compose exec weather-app /bin/sh
+
+# Execute an isolated non-interactive command (e.g., check database file)
+docker compose exec weather-app ls -la /app/data
+
+# Launch a temporary debugging container directly attached to the compose network
+# Replace weather-intelligence-agent_weather-net with the exact network name produced by Compose, verifiable via docker network ls
+docker run --rm -it --network weather-intelligence-agent_weather-net alpine sh
+
+docker network ls

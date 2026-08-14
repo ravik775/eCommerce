@@ -11,10 +11,74 @@
 
     <artifactId>common-lib</artifactId>
 
-    <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
+    <!-- Was overriding compiler source/target to 25, inconsistent with the
+         rest of the reactor's Java 21 target (root pom.xml) — removed so
+         this module inherits the same target as every other module. -->
+
+    <dependencies>
+        <!-- ADR-0015 (doc/adr/ADR-0015-kafka-schema-json-documented.md):
+             Kafka events stay plain JSON with no schema registry, but are
+             validated against a checked-in JSON Schema at publish and
+             consume time — this is the concrete enforcement mechanism for
+             that decision, shared by every producer/consumer via common-lib. -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.6</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- ADR-0023 (doc/adr/ADR-0023-correlation-trace-id.md): the shared
+             correlation/trace-ID filter, auto-configured into every
+             Servlet-based service that depends on common-lib. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- ADR-0025 (doc/adr/ADR-0025-jwt-rbac-method-security.md): shared
+             Keycloak realm_access.roles -> ROLE_* GrantedAuthority mapping,
+             consumed by every servlet-based (non-gateway) service as an
+             OAuth2 resource server. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

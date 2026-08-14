@@ -1,0 +1,11 @@
+# Deliberately separate from k8s/base/kustomization.yaml: that file sets
+# a global `namespace: ecom`, which would override every resource here's
+# own `namespace: spire`/cluster-scoped RBAC. Apply with:
+#   kubectl apply -k k8s/base/spire
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - server.yaml
+  - agent.yaml
+  - csi-driver.yaml

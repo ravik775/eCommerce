@@ -1,3 +1,8 @@
+# ADR-0004 (doc/adr/ADR-0004-datastore-postgres-schema-per-service.md):
+# Postgres, one instance, one schema per service — replaces MySQL. This is
+# a LOCAL DEV credential only (generated for this environment, not reused
+# anywhere else); real secret handling (K8s Secrets) lands in Phase 7 per
+# ADR-0004's follow-up and doc/architecture/07-migration-planning.md.
 server:
   port: 8082
 
@@ -10,6 +15,15 @@ eureka:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/orderdb
-    username: root
-    password: root
+    url: jdbc:postgresql://localhost:5432/ecommerce?currentSchema=order_service
+    username: ecommerce_dev
+    password: PRMbIw12h6JxrkkIruKqh65g
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    properties:
+      hibernate:
+        default_schema: order_service
+  flyway:
+    schemas: order_service
+    create-schemas: true
+    baseline-on-migrate: true

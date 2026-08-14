@@ -1,0 +1,43 @@
+# ADR-0008: K8s-native config replaces config-server in this environment.
+# Mirrors config-repo/application.yml's shared properties as a plain
+# ConfigMap consumed via envFrom by every app service — no config-server
+# pod exists here. Gateway routing lives in its own ConfigMap (nested
+# YAML, not flat env-friendly properties).
+#
+# LOCAL-DEV DEVIATION from ADR-0004/ADR-0022 (Postgres in-cluster) and
+# the general "everything in-cluster" Phase 6 model: Postgres, Kafka, and
+# Keycloak run as standalone Docker containers on the host, NOT as K8s
+# pods, to reduce load on this dev machine after a real resource-
+# exhaustion incident (Docker Desktop's engine crashed with 13 Compose
+# containers + 12 unthrottled K8s pods running simultaneously). Pods
+# reach them via Docker Desktop's automatic `host.docker.internal` host
+# alias. RabbitMQ and Redis (lightweight) stay in-cluster.
+# This is explicitly a LOCAL-ONLY override — the real deployment target
+# (Oracle Cloud Ubuntu) still runs Postgres in-cluster per ADR-0022; that
+# decision isn't reversed, just not exercised on this machine right now.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: common-config
+  namespace: ecom
+data:
+  SPRING_CLOUD_CONFIG_ENABLED: "false"
+  SPRING_CONFIG_IMPORT: ""
+  EUREKA_CLIENT_ENABLED: "false"
+  SPRING_CLOUD_DISCOVERY_ENABLED: "false"
+  LOGGING_PATTERN_LEVEL: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-}]"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "host.docker.internal:9092"
+  SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
+  SPRING_KAFKA_CONSUMER_PROPERTIES_SPRING_JSON_TRUSTED_PACKAGES: "org.bgm.*"
+  SPRING_RABBITMQ_HOST: "rabbitmq"
+  SPRING_RABBITMQ_PORT: "5672"
+  SPRING_DATA_REDIS_HOST: "redis"
+  # issuer-uri is a pure STRING MATCH against the `iss` claim already
+  # embedded in issued JWTs (resource servers never dereference it as a
+  # URL when jwk-set-uri is also set). Keycloak now runs as a standalone
+  # host container with KC_HOSTNAME=http://localhost:8090 (browser- and
+  # host-reachable) + KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true (lets pods
+  # validate correctly when they reach it via host.docker.internal
+  # instead of localhost) — same pattern as Phase 5's Docker Compose fix.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: "http://localhost:8090/realms/ecom"
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: "http://host.docker.internal:8090/realms/ecom/protocol/openid-connect/certs"

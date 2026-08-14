@@ -16,6 +16,18 @@
         <spring-cloud.version>2024.0.1</spring-cloud.version>
     </properties-->
     <dependencies>
+        <!-- ADR-0023: shared header/MDC-key constants (the reactive filter
+             itself lives here in api-gateway — GatewayConfig.java — since
+             common-lib's filter is Servlet-based and the gateway is
+             WebFlux). -->
+        <dependency>
+            <groupId>org.bgm</groupId>
+            <artifactId>common-lib</artifactId>
+            <!-- Not ${project.version}: api-gateway declares its own
+                 0.0.1-SNAPSHOT version, distinct from common-lib's
+                 (inherited from the root aggregator, 1.0-SNAPSHOT). -->
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
@@ -63,6 +75,17 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
         </dependency>
+        <!-- ADR-0005 (gateway terminates the browser-facing OIDC login) /
+             ADR-0017 (PKCE): reactive OAuth2 client. Also brings Spring
+             Cloud Gateway's TokenRelay filter factory into play (built
+             into spring-cloud-starter-gateway once this is on the
+             classpath), which relays the resulting access token to
+             downstream services as `Authorization: Bearer` — the BFF
+             pattern this project's ADR-0005 describes. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
         <!--dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot</artifactId>
@@ -103,6 +126,11 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- ADR-0011: opt into the shared release-zip assembly (config in root pluginManagement). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

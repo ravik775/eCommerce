@@ -1,0 +1,279 @@
+name: ecomd
+# Docker Compose project name "ecomd" is deliberately distinct from the
+# Kubernetes namespace "ecom" (ADR-0026), so logs/tooling always make clear
+# which environment a resource belongs to.
+#
+# Supersedes scripts/dev-up.sh's direct-java-process model per ADR-0029's
+# follow-up note — that script remains for the interim/local-only case but
+# this is the reproducible path going forward (Phase 5).
+#
+# Keycloak hostname note: KC_HOSTNAME is pinned to "localhost:8090" so the
+# `iss` claim on every issued token is identical regardless of whether the
+# token was requested by a browser (via the host-mapped port) or by a
+# container doing a server-to-server token exchange (via the "keycloak"
+# service name on the compose network) — without this, Keycloak stamps
+# `iss` from the request's Host header, and the gateway's own token
+# exchange (container-to-container) would stamp a different issuer than
+# what the resource-server services validate against. Since containers
+# can't resolve "localhost:8090" as Keycloak, the OAuth2 client/resource
+# server endpoints that must be reached from inside the network (token,
+# jwks, userinfo) are pointed at the internal "keycloak:8080" address via
+# explicit property overrides below, while authorization-uri stays on
+# localhost:8090 since only the browser calls it.
+
+services:
+  # ---- infra ----
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ecommerce_dev
+      POSTGRES_PASSWORD: PRMbIw12h6JxrkkIruKqh65g
+      POSTGRES_DB: ecommerce
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports: ["9092:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ecommerce_dev
+      RABBITMQ_DEFAULT_PASS: PRMbIw12h6JxrkkIruKqh65g
+    ports: ["5673:5672", "15673:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # Full URL required: hostname-backchannel-dynamic rejects a bare
+      # hostname (found live — Keycloak refused to start with
+      # "hostname-backchannel-dynamic must be set to false if hostname is
+      # not provided as full URL").
+      KC_HOSTNAME: http://localhost:8090
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      # Root cause of the Phase 5 OAuth2 login gap, isolated live: with a
+      # fixed KC_HOSTNAME, token exchange via the internal "keycloak:8080"
+      # address succeeds, but Keycloak's UserInfo endpoint specifically
+      # rejected the exact same valid access token with 401 "Token
+      # verification failed" when called via that same internal address
+      # (confirmed: the identical token worked fine via the public
+      # localhost:8090 address) — a Host-header-based backchannel check
+      # independent of KC_HOSTNAME_STRICT. This is Keycloak 26's
+      # documented fix for exactly this reverse-proxy/container split:
+      # let backchannel (server-to-server) calls validate against
+      # whatever address they actually arrive on, instead of enforcing
+      # the fixed public hostname for every request.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    ports: ["8090:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/master HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  # ---- discovery + config ----
+  config-server:
+    build: { context: ., dockerfile: config-server/Dockerfile }
+    ports: ["8888:8888"]
+    # HTTP-200-only check, not a body/"UP" match: config-server's own
+    # /actuator/health is shadowed by its generic Environment Controller
+    # route (Spring Cloud Config Server maps /{application}/{profile}
+    # generically, and "actuator"/"health" match that pattern before the
+    # real actuator endpoint), so it returns a config-property dump, not
+    # {"status":"UP"} — found live via this healthcheck failing while the
+    # app logs showed 200 OK the whole time. Functionally harmless (config
+    # fetches work correctly), but it means config-server's real health
+    # isn't actually observable today — flagged for Phase 7, not silently
+    # worked around by pretending this check verifies more than it does.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8888/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  service-discovery:
+    build: { context: ., dockerfile: service-discovery/Dockerfile }
+    ports: ["8086:8086"]
+    depends_on:
+      config-server: { condition: service_healthy }
+    environment:
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8086/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Healthcheck note: every app service's /actuator/health is a secured
+  # resource-server endpoint (401, empty body, no "status":"UP" JSON —
+  # matches this session's earlier live finding for the standalone
+  # gateway/backend actuator endpoints). A body-content check
+  # (`grep -q UP`) would treat every genuinely healthy service as
+  # permanently unhealthy — found live: all 5 app services actually
+  # finished starting and registered with Eureka correctly, yet Compose
+  # reported every one "unhealthy" via that check. Fixed to accept any
+  # real HTTP status line (401 included) as proof the JVM/Tomcat/Spring
+  # Security stack is up, since that's the strongest signal available
+  # without disabling actuator security for this check alone.
+  # ---- application services ----
+  user-service: &app-service
+    build: { context: ., dockerfile: user-service/Dockerfile }
+    ports: ["8081:8081"]
+    depends_on:
+      config-server: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    environment: &app-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-discovery:8086/eureka
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ecommerce
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: "5672"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: http://keycloak:8080/realms/ecom/protocol/openid-connect/certs
+    healthcheck: &app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8081/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  order-service:
+    <<: *app-service
+    build: { context: ., dockerfile: order-service/Dockerfile }
+    ports: ["8082:8082"]
+    environment:
+      <<: *app-env
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8082/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+
+  catalog-service:
+    <<: *app-service
+    build: { context: ., dockerfile: catalog-service/Dockerfile }
+    ports: ["8083:8083"]
+    environment:
+      <<: *app-env
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8083/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+
+  inventory-service:
+    <<: *app-service
+    build: { context: ., dockerfile: inventory-service/Dockerfile }
+    ports: ["8084:8084"]
+    environment:
+      <<: *app-env
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8084/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+
+  payment-service:
+    <<: *app-service
+    build: { context: ., dockerfile: payment-service/Dockerfile }
+    ports: ["8085:8085"]
+    environment:
+      <<: *app-env
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8085/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+
+  notification-service:
+    <<: *app-service
+    build: { context: ., dockerfile: notification-service/Dockerfile }
+    ports: ["8087:8087"]
+    depends_on:
+      config-server: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      <<: *app-env
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8087/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+
+  # ---- gateway (started last: relays to everything above) ----
+  api-gateway:
+    build: { context: ., dockerfile: api-gateway/Dockerfile }
+    ports: ["8080:8080"]
+    depends_on:
+      config-server: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+      user-service: { condition: service_healthy }
+      order-service: { condition: service_healthy }
+      catalog-service: { condition: service_healthy }
+      inventory-service: { condition: service_healthy }
+      payment-service: { condition: service_healthy }
+    environment:
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-discovery:8086/eureka
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: http://keycloak:8080/realms/ecom/protocol/openid-connect/certs
+      # Browser must reach this URL directly, so it stays on the
+      # host-mapped port — see the top-of-file Keycloak hostname note.
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_AUTHORIZATION_URI: http://localhost:8090/realms/ecom/protocol/openid-connect/auth
+      # These three are server-to-server (gateway container -> Keycloak
+      # container) and must use the internal compose network address.
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_TOKEN_URI: http://keycloak:8080/realms/ecom/protocol/openid-connect/token
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/ecom/protocol/openid-connect/certs
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_USER_INFO_URI: http://keycloak:8080/realms/ecom/protocol/openid-connect/userinfo
+      # No issuer-uri override here, deliberately: config-repo/api-gateway.yml
+      # no longer sets issuer-uri at all (see that file's comment) — only
+      # explicit endpoints, which avoids the OIDC discovery HTTP call
+      # entirely rather than fighting over what single issuer-uri value
+      # could work for both the container-internal discovery fetch and
+      # the browser-facing `iss` claim on issued tokens.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://localhost:8080/actuator/health 2>&1 | grep -qE 'HTTP/1.1 [0-9]'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s

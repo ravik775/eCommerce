@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecommerce.bgm.org/schemas/payment-success.schema.json",
+  "title": "payment-success",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "orderId", "paymentId", "amount", "occurredAt"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "integer" },
+    "paymentId": { "type": "string", "minLength": 1 },
+    "amount": { "type": "number", "minimum": 0 },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  }
+}

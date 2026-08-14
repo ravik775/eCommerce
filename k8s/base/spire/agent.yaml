@@ -1,0 +1,188 @@
+# SPIRE agent: one per node (DaemonSet), attests itself to the server via
+# the k8s_psat projected-ServiceAccount-token node attestor, then serves
+# the Workload API over a Unix socket that the SPIFFE CSI Driver
+# (csi-driver.yaml) re-exposes to app pods without hostPath in their own
+# spec. Lives in the "spire" namespace (privileged PSS) — see
+# namespace.yaml's comment for why that's scoped to just this namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent-cluster-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+---
+# Grants the wait-for-bundle init container permission to read the
+# trust-bundle ConfigMap spire-server publishes — found live via
+# `kubectl auth can-i get configmaps --as=system:serviceaccount:spire:
+# spire-agent -n spire` returning "no": the init container's `kubectl
+# get configmap` was failing on every loop iteration with Forbidden, not
+# genuinely waiting for content, but the wait loop's generic "waiting for
+# trust bundle" echo masked the real (permission, not timing) cause.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-agent-bundle-reader
+  namespace: spire
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-agent-bundle-reader-binding
+  namespace: spire
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: spire
+roleRef:
+  kind: Role
+  name: spire-agent-bundle-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent-cluster-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: spire-agent-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent-config
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire/data"
+      log_level = "INFO"
+      server_address = "spire-server"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "ecommerce.local"
+      trust_bundle_path = "/run/spire/bundle/bundle.crt"
+    }
+
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "docker-desktop"
+        }
+      }
+
+      KeyManager "memory" {
+        plugin_data {}
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          skip_kubelet_verification = true
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire
+spec:
+  selector:
+    matchLabels: { app: spire-agent }
+  template:
+    metadata:
+      labels: { app: spire-agent }
+    spec:
+      serviceAccountName: spire-agent
+      hostPID: false
+      hostNetwork: false
+      initContainers:
+        # Waits for spire-server to publish the trust bundle ConfigMap
+        # (via the k8sbundle notifier plugin) before the agent tries its
+        # first attestation — without this, a fresh cluster's agent can
+        # crash-loop racing the server's first boot.
+        - name: wait-for-bundle
+          # bitnami/kubectl:1.31 doesn't exist (Bitnami's 2025/2026
+          # image-distribution changes deprecated many free tags) —
+          # found live via ImagePullBackOff. alpine/k8s bundles kubectl
+          # on a small, actively maintained base.
+          image: alpine/k8s:1.31.1
+          command: ["sh", "-c", "until kubectl get configmap spire-bundle -n spire -o jsonpath='{.data.bundle\\.crt}' > /run/spire/bundle/bundle.crt 2>/dev/null && [ -s /run/spire/bundle/bundle.crt ]; do echo waiting for trust bundle; sleep 3; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - { name: spire-bundle, mountPath: /run/spire/bundle }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.11.0
+          args: ["-config", "/run/spire/config/agent.conf"]
+          securityContext:
+            # The agent itself needs to run as root to create the
+            # Workload API socket with permissions every app pod's
+            # container UID can connect to — the standard, documented
+            # SPIRE-on-Kubernetes requirement, isolated to this one
+            # DaemonSet in the privileged `spire` namespace only.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: spire-config, mountPath: /run/spire/config, readOnly: true }
+            - { name: spire-bundle, mountPath: /run/spire/bundle }
+            - { name: spire-agent-sockets, mountPath: /run/spire/sockets }
+            - { name: spire-data, mountPath: /run/spire/data }
+            - { name: spire-token, mountPath: /var/run/secrets/tokens, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          livenessProbe:
+            exec: { command: ["/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"] }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - { name: spire-config, configMap: { name: spire-agent-config } }
+        - { name: spire-bundle, emptyDir: {} }
+        - { name: spire-data, emptyDir: {} }
+        - name: spire-token
+          # k8s_psat node attestation needs an audience-scoped, projected
+          # ServiceAccount token at this exact path — found live:
+          # "unable to load token from /var/run/secrets/tokens/
+          # spire-agent: no such file or directory". The default
+          # automounted SA token (different path, no audience) doesn't
+          # satisfy this attestor.
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: spire-agent
+                  expirationSeconds: 7200
+                  audience: spire-server
+        - name: spire-agent-sockets
+          # hostPath is correct and required here: this is the one
+          # directory the SPIFFE CSI Driver bind-mounts read-only into
+          # app pods via a CSI ephemeral volume, so app pods never need
+          # hostPath themselves (see csi-driver.yaml).
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate

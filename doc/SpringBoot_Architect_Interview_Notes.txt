@@ -1,0 +1,365 @@
+Experienced Spring Boot Engineer & Software Architect Interview Notes
+
+1. Spring Framework
+
+What is Spring Framework?
+
+-   Lightweight, modular framework for building Java applications.
+-   Provides Dependency Injection (DI) and Inversion of Control (IoC).
+-   Promotes loose coupling and testability.
+
+Core Modules
+
+-   Spring Core (IoC Container)
+-   Spring AOP
+-   Spring JDBC
+-   Spring ORM
+-   Spring MVC
+-   Spring Security
+-   Spring Test
+
+IoC and Dependency Injection
+
+-   Constructor Injection (preferred)
+-   Setter Injection
+-   Field Injection (generally discouraged)
+
+Bean Lifecycle
+
+-   Instantiation
+-   Dependency Injection
+-   PostConstruct
+-   Bean Usage
+-   PreDestroy
+
+AOP
+
+-   Cross-cutting concerns:
+    -   Logging
+    -   Security
+    -   Auditing
+    -   Transactions
+
+Common Interview Questions
+
+-   IoC vs DI
+-   Bean scopes
+-   AOP vs OOP
+-   Bean lifecycle
+-   Circular dependency handling
+
+------------------------------------------------------------------------
+
+2. Spring Boot
+
+What is Spring Boot?
+
+Spring Boot is an opinionated extension of Spring Framework that reduces
+configuration and accelerates development through auto-configuration and
+starter dependencies.
+
+Spring Framework vs Spring Boot
+
+Spring Framework: - Requires manual configuration. - XML/Java
+configuration. - Manual dependency management.
+
+Spring Boot: - Auto Configuration. - Embedded Tomcat/Jetty. - Starter
+dependencies. - Production-ready Actuator. - Rapid development.
+
+Key Features
+
+-   AutoConfiguration
+-   Starter Dependencies
+-   Spring Boot CLI
+-   Embedded Servers
+-   Actuator
+-   Externalized Configuration
+
+@RestController and @RequestMapping
+
+@RestController: - Combines @Controller + @ResponseBody. - Returns
+JSON/XML directly.
+
+@RequestMapping: - Maps requests to controllers.
+
+Example:
+
+    @RestController
+    @RequestMapping("/api/products")
+    public class ProductController {
+
+        @GetMapping("/{id}")
+        public Product getProduct(@PathVariable Long id){
+            return service.findById(id);
+        }
+    }
+
+RestTemplate Real World Customizations
+
+    @Bean
+    public RestTemplate restTemplate() {
+        RestTemplate rt = new RestTemplate();
+
+        rt.setInterceptors(List.of(new LoggingInterceptor()));
+
+        return rt;
+    }
+
+Common Customizations: - Connection pooling - Timeouts - Logging
+interceptors - Retry logic - OAuth/JWT headers - Error handlers -
+Metrics and tracing - SSL customization
+
+Pageable vs Slice
+
+Page: - Total records available. - Executes COUNT query.
+
+Slice: - Knows only if next page exists. - No COUNT query. - Better for
+infinite scrolling.
+
+Use Page: - Admin screens - Reports
+
+Use Slice: - Feeds - Infinite scroll
+
+------------------------------------------------------------------------
+
+3. Spring Security
+
+Core Concepts
+
+-   Authentication
+-   Authorization
+-   Principal
+-   Roles
+-   Authorities
+
+Authentication Flow
+
+1.  Request
+2.  Security Filter Chain
+3.  AuthenticationManager
+4.  AuthenticationProvider
+5.  UserDetailsService
+6.  SecurityContext
+
+Roles vs Authorities
+
+Role:
+
+    ROLE_ADMIN
+    ROLE_USER
+
+Authority:
+
+    product:read
+    product:write
+    order:create
+
+Password Encoding
+
+-   BCrypt (recommended)
+-   Resistant to rainbow table attacks
+
+OAuth2
+
+Flows: - Authorization Code - Client Credentials - Refresh Token
+
+JWT
+
+Structure: - Header - Payload - Signature
+
+Security Best Practices
+
+-   HTTPS everywhere
+-   CSRF protection
+-   Rate limiting
+-   Secure cookies
+-   Input validation
+-   Least privilege
+
+------------------------------------------------------------------------
+
+4. Spring Cloud
+
+Why Spring Cloud?
+
+Provides distributed system patterns.
+
+Components
+
+Config Server
+
+Centralized configuration.
+
+Service Discovery
+
+-   Eureka
+-   Consul
+
+Circuit Breaker
+
+Resilience4j
+
+States: - Closed - Open - Half Open
+
+Benefits: - Prevent cascading failures. - Improve resilience.
+
+Load Balancer
+
+Client-side load balancing.
+
+Strategies: - Round Robin - Random - Weighted
+
+API Gateway
+
+Responsibilities: - Routing - Authentication - Rate Limiting - Logging -
+Header manipulation
+
+Spring Cloud Gateway features: - Filters - Predicates - Circuit
+Breakers - Request transformations
+
+------------------------------------------------------------------------
+
+5. Reverse Proxy
+
+What is Reverse Proxy?
+
+Receives requests from clients and forwards them to backend services.
+
+Examples: - NGINX - HAProxy - Apache HTTP Server
+
+Benefits
+
+-   SSL termination
+-   Load balancing
+-   Caching
+-   Security
+-   Traffic routing
+
+Reverse Proxy vs Load Balancer
+
+Reverse Proxy: - Front door for services.
+
+Load Balancer: - Distributes traffic across instances.
+
+Modern tools often provide both.
+
+------------------------------------------------------------------------
+
+6. Spring JPA and Hibernate
+
+JPA
+
+Specification.
+
+Hibernate
+
+Most popular JPA implementation.
+
+Entity Lifecycle
+
+-   Transient
+-   Persistent
+-   Detached
+-   Removed
+
+Cascade Types
+
+    @OneToMany(
+        mappedBy="order",
+        cascade=CascadeType.ALL,
+        orphanRemoval=true
+    )
+    private List<LineItem> items;
+
+CascadeType.REMOVE: - Parent deleted -> Child deleted.
+
+Fetch Types
+
+EAGER: - Load immediately.
+
+LAZY: - Load when accessed.
+
+Prefer LAZY by default.
+
+N+1 Problem
+
+Problem: - One query for parent. - N queries for children.
+
+Solutions: - Fetch Join - Entity Graph - Batch Fetching
+
+Optimistic Locking
+
+    @Version
+    private Long version;
+
+Prevents lost updates.
+
+Pageable vs Slice
+
+Important for performance-sensitive APIs.
+
+------------------------------------------------------------------------
+
+7. Clean Code & Architecture
+
+SOLID Principles
+
+S - Single Responsibility Principle O - Open Closed Principle L - Liskov
+Substitution Principle I - Interface Segregation Principle D -
+Dependency Inversion Principle
+
+Clean Code Guidelines
+
+-   Meaningful names
+-   Small methods
+-   Single responsibility
+-   Avoid duplication
+-   Prefer composition over inheritance
+
+Layered Architecture
+
+Controller ↓ Service ↓ Repository ↓ Database
+
+Architectural Patterns
+
+-   Monolith
+-   Modular Monolith
+-   Microservices
+-   Event Driven Architecture
+
+CAP Theorem
+
+Choose at most two: - Consistency - Availability - Partition Tolerance
+
+Distributed System Essentials
+
+-   Idempotency
+-   Retries
+-   Circuit Breakers
+-   Eventual Consistency
+-   Saga Pattern
+-   CQRS
+-   Outbox Pattern
+
+Production Readiness Checklist
+
+-   Logging
+-   Monitoring
+-   Metrics
+-   Distributed tracing
+-   Health checks
+-   Rate limiting
+-   Security headers
+-   Database indexing
+-   Caching
+-   CI/CD
+
+Software Architect Focus Areas
+
+-   Scalability
+-   Reliability
+-   Security
+-   Observability
+-   Performance
+-   Cost Optimization
+-   Maintainability

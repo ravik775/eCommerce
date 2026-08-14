@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: rabbitmq }
+  template:
+    metadata:
+      labels: { app: rabbitmq }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine
+          ports: [{ containerPort: 5672 }, { containerPort: 15672 }]
+          envFrom:
+            - secretRef: { name: rabbitmq-secret }
+          env:
+            # Root cause of the live OOM loop (256Mi and 512Mi both
+            # crashed it): RabbitMQ's DEFAULT memory watermark is
+            # RELATIVE to detected system memory, not the cgroup limit —
+            # explicitly called out as unsafe in containers by RabbitMQ's
+            # own docs (rabbitmq.com/docs/memory: "using a relative
+            # memory threshold is not recommended in containerized
+            # environments"). An absolute watermark fixes it.
+            - { name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS, value: "-rabbit vm_memory_high_watermark_absolute \"700MB\"" }
+          # requests == limits (Guaranteed QoS) per RabbitMQ's own K8s
+          # Cluster Operator guidance — avoids the container being
+          # resized under memory pressure, which the relative-watermark
+          # bug above made fatal. 1Gi matches production-example sizing
+          # (rabbitmq.com/kubernetes/operator) scaled for single-node
+          # local dev with the management plugin enabled.
+          resources:
+            requests: { cpu: 250m, memory: 1Gi }
+            limits: { cpu: 500m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            # Default timeoutSeconds (1) was too short for
+            # rabbitmq-diagnostics under this container's CPU limit —
+            # found live: "command timed out ... after 1s" on every
+            # check, permanently blocking readiness even though the
+            # process itself was fine.
+            exec: { command: ["rabbitmq-diagnostics", "-q", "ping"] }
+            periodSeconds: 10
+            initialDelaySeconds: 20
+            timeoutSeconds: 8
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: ecom
+spec:
+  selector: { app: rabbitmq }
+  ports:
+    - { name: amqp, port: 5672, targetPort: 5672 }
+    - { name: mgmt, port: 15672, targetPort: 15672 }

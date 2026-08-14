@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecommerce.bgm.org/schemas/order-created.schema.json",
+  "title": "order-created",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "orderId", "customerId", "items", "totalAmount", "occurredAt"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "integer" },
+    "customerId": { "type": "string" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["productId", "quantity", "unitPrice"],
+        "properties": {
+          "productId": { "type": "integer" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "unitPrice": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "totalAmount": { "type": "number", "minimum": 0 },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  }
+}

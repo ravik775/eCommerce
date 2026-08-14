@@ -1,0 +1,212 @@
+# CI pipeline. Full rationale/evidence: doc/adr/ADR-0010-cicd-pipeline-sast-dast.md
+# and doc/adr/ADR-0011-artifact-packaging-zip.md.
+#
+# Stages: build -> test -> SAST (CodeQL) -> SCA (OWASP Dependency-Check) ->
+# package (zip, ADR-0011) -> DAST (OWASP ZAP, advisory-only until Phase 4
+# per ADR-0010, since there are no real authenticated endpoints to scan yet).
+#
+# No stage pushes an artifact anywhere (no registry, no repository) — the
+# release zip is retained only as a workflow-run artifact. Pushing is a
+# deliberately deferred, separate decision (ADR-0010).
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write # required for CodeQL SARIF upload
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # This repo is developed on Windows, where git doesn't track the Unix
+      # executable bit — `./mvnw` would otherwise fail with "Permission
+      # denied" on the first run on this ubuntu-latest runner.
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      # ADR-0002: build + install common-lib (including the future
+      # spiffe-mtls module) before dependent services, same as any
+      # multi-module Maven project.
+      - name: Build (all 10 modules)
+        run: ./mvnw -B clean install -DskipTests
+
+      - name: Unit + integration tests
+        run: ./mvnw -B verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: "**/target/surefire-reports/**"
+          retention-days: 7
+
+  sast:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # This repo is developed on Windows, where git doesn't track the Unix
+      # executable bit — `./mvnw` would otherwise fail with "Permission
+      # denied" on the first run on this ubuntu-latest runner.
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+
+      - name: Build for CodeQL
+        run: ./mvnw -B clean install -DskipTests
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  sca:
+    name: SCA (OWASP Dependency-Check)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # This repo is developed on Windows, where git doesn't track the Unix
+      # executable bit — `./mvnw` would otherwise fail with "Permission
+      # denied" on the first run on this ubuntu-latest runner.
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      # Invoked directly by full coordinates so no per-module pom.xml needs
+      # the plugin declared — one aggregate report across the reactor.
+      - name: OWASP Dependency-Check (aggregate)
+        run: >
+          ./mvnw -B org.owasp:dependency-check-maven:12.1.0:aggregate
+          -DfailBuildOnCVSS=8
+          -Dformats=HTML,SARIF
+
+      - name: Upload Dependency-Check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.*
+          retention-days: 7
+
+  package:
+    name: Package (release zip)
+    runs-on: ubuntu-latest
+    needs: [sast, sca]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # This repo is developed on Windows, where git doesn't track the Unix
+      # executable bit — `./mvnw` would otherwise fail with "Permission
+      # denied" on the first run on this ubuntu-latest runner.
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      # ADR-0011: executable JAR wrapped in a release ZIP per service.
+      # WAR remains available via `-Pwar` if ever needed, not built here.
+      - name: Build release zips
+        run: ./mvnw -B clean package -DskipTests
+
+      - name: Collect release zips
+        run: |
+          mkdir -p dist
+          find . -path "*/target/*-release.zip" -exec cp {} dist/ \;
+          ls -la dist/
+
+      # Workflow-run artifact only — NOT pushed to a registry or artifact
+      # repository. See ADR-0010 "Follow-up required".
+      - name: Upload release zips (workflow artifact only, not published)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zips
+          path: dist/*.zip
+          retention-days: 14
+
+  dast:
+    name: DAST (OWASP ZAP, advisory)
+    runs-on: ubuntu-latest
+    needs: package
+    # Advisory-only until Phase 4 (real auth boundary exists to scan
+    # meaningfully) per ADR-0010 — failures here do not fail the pipeline yet.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # This repo is developed on Windows, where git doesn't track the Unix
+      # executable bit — `./mvnw` would otherwise fail with "Permission
+      # denied" on the first run on this ubuntu-latest runner.
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      # config-server is the smallest service that boots standalone (no
+      # Eureka/DB/broker dependency), making it the current best DAST
+      # target. Widens to the full stack once Phase 5's docker-compose
+      # exists to bring everything up together.
+      - name: Start config-server
+        run: |
+          ./mvnw -q -pl config-server spring-boot:run &
+          echo $! > config-server.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8888/actuator/health && break
+            sleep 2
+          done
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://localhost:8888"
+          rules_file_name: ".github/zap/rules.tsv"
+          cmd_options: "-a"
+
+      - name: Stop config-server
+        if: always()
+        run: kill "$(cat config-server.pid)" || true

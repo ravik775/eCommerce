@@ -1,0 +1,93 @@
+# SPIFFE CSI Driver: re-exposes the agent's Workload API socket
+# (agent.yaml's hostPath) to app pods as a CSI ephemeral inline volume —
+# the mechanism that lets `ecom` (restricted PSS, ADR-0020) app pods
+# reach the socket without themselves needing a hostPath volume, which
+# restricted PSS disallows. Actively maintained (spiffe/spiffe-csi,
+# v0.14.0 released June 2026) — re-confirmed live before use, see
+# ADR-0002's Phase 6b reconfirmation note.
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.spiffe.io
+spec:
+  fsGroupPolicy: File
+  podInfoOnMount: true
+  volumeLifecycleModes: ["Ephemeral"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spiffe-csi-driver
+  namespace: spire
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spiffe-csi-driver
+  namespace: spire
+spec:
+  selector:
+    matchLabels: { app: spiffe-csi-driver }
+  template:
+    metadata:
+      labels: { app: spiffe-csi-driver }
+    spec:
+      serviceAccountName: spiffe-csi-driver
+      containers:
+        - name: spiffe-csi-driver
+          image: ghcr.io/spiffe/spiffe-csi-driver:0.2.6
+          args:
+            - "-workload-api-socket-dir=/spire-agent-socket"
+            - "-plugin-name=csi.spiffe.io"
+            - "-csi-socket-path=/spiffe-csi/csi.sock"
+            # Required — found live via "Failed to create driver: node ID
+            # is required" — not documented as mandatory in every
+            # example manifest floating around, but this version rejects
+            # startup without it.
+            - "-node-id=$(NODE_ID)"
+          env:
+            - name: NODE_ID
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          securityContext:
+            # Also root, same justification as the agent — required to
+            # perform bind mounts into other pods' mount namespaces, the
+            # entire mechanism this driver exists to provide.
+            runAsUser: 0
+            privileged: true
+            capabilities: { add: ["SYS_ADMIN"] }
+          volumeMounts:
+            - { name: spire-agent-socket-dir, mountPath: /spire-agent-socket }
+            - { name: spiffe-csi-socket-dir, mountPath: /spiffe-csi }
+            - { name: kubelet-pods-dir, mountPath: /var/lib/kubelet/pods, mountPropagation: Bidirectional }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.1
+          args:
+            - "-csi-address=/spiffe-csi/csi.sock"
+            - "-kubelet-registration-path=/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: spiffe-csi-socket-dir, mountPath: /spiffe-csi }
+            - { name: kubelet-registration-dir, mountPath: /registration }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      volumes:
+        - { name: spire-agent-socket-dir, hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate } }
+        # This hostPath MUST be the exact directory kubelet itself scans
+        # for CSI plugin sockets — found live: originally split into two
+        # separate volumes (this one at a private /run/spire/... path,
+        # plus a second "kubelet-plugin-dir" mounted only at
+        # /var/lib/kubelet/plugins/csi.spiffe.io), so the driver's actual
+        # csi.sock never appeared where node-driver-registrar told
+        # kubelet to look for it — registration failed every time with
+        # "no such file or directory". Unified into one volume so the
+        # socket the driver writes and the path kubelet checks are
+        # provably the same file.
+        - { name: spiffe-csi-socket-dir, hostPath: { path: /var/lib/kubelet/plugins/csi.spiffe.io, type: DirectoryOrCreate } }
+        - { name: kubelet-registration-dir, hostPath: { path: /var/lib/kubelet/plugins_registry, type: Directory } }
+        - { name: kubelet-pods-dir, hostPath: { path: /var/lib/kubelet/pods, type: Directory } }

@@ -1,0 +1,102 @@
+{
+  "realm": "ecom",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "CUSTOMER", "description": "Can browse catalog and place/cancel/return orders" },
+      { "name": "ADMIN", "description": "Can manage catalog in addition to CUSTOMER capabilities" },
+      { "name": "SUPER_ADMIN", "description": "Can manage users/roles in addition to ADMIN capabilities" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ecommerce-gateway",
+      "name": "eCommerce API Gateway (BFF)",
+      "description": "Confidential client — the gateway terminates the browser-facing OIDC login (ADR-0005) and relays the resulting access token downstream via Spring Cloud Gateway's TokenRelay filter.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/login/oauth2/code/keycloak"
+      ],
+      "webOrigins": ["http://localhost:8080"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": ["web-origins", "profile", "roles", "email"],
+      "protocolMappers": [
+        {
+          "name": "tenant_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "tenant_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ecommerce-ui",
+      "name": "eCommerce SPA (Phase 8)",
+      "description": "Public client with mandatory PKCE (ADR-0017) — for the future browser SPA if it ever talks to Keycloak directly instead of via the gateway BFF.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "customer1",
+      "enabled": true,
+      "firstName": "Test",
+      "lastName": "Customer",
+      "email": "customer1@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "customer1-pass", "temporary": false }],
+      "requiredActions": [],
+      "realmRoles": ["CUSTOMER"]
+    },
+    {
+      "username": "admin1",
+      "enabled": true,
+      "firstName": "Test",
+      "lastName": "Admin",
+      "email": "admin1@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin1-pass", "temporary": false }],
+      "requiredActions": [],
+      "realmRoles": ["ADMIN", "CUSTOMER"]
+    },
+    {
+      "username": "superadmin1",
+      "enabled": true,
+      "firstName": "Test",
+      "lastName": "SuperAdmin",
+      "email": "superadmin1@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "superadmin1-pass", "temporary": false }],
+      "requiredActions": [],
+      "realmRoles": ["SUPER_ADMIN", "ADMIN", "CUSTOMER"]
+    }
+  ]
+}

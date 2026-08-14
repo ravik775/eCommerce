@@ -118,6 +118,11 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- ADR-0011: opt into the shared release-zip assembly (config in root pluginManagement). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+            </plugin>
         </plugins>
     </build>
 

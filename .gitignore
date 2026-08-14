@@ -1,5 +1,7 @@
 .idea/**
 target/
+scripts/.dev-logs/
+scripts/.dev-pids/
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup

@@ -1,0 +1,26 @@
+# ADR-0004: Postgres, schema-per-service. Local dev credential only — see
+# order-service.yml's header comment for the full note.
+server:
+  port: 8084
+
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: http://localhost:8086/eureka/
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ecommerce?currentSchema=inventory_service
+    username: ecommerce_dev
+    password: PRMbIw12h6JxrkkIruKqh65g
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    properties:
+      hibernate:
+        default_schema: inventory_service
+  flyway:
+    schemas: inventory_service
+    create-schemas: true
+    baseline-on-migrate: true

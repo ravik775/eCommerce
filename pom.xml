@@ -23,6 +23,11 @@
         <module>config-server</module>
         <module>service-discovery</module>
         <module>api-gateway</module>
+        <module>user-service</module>
+        <module>catalog-service</module>
+        <module>inventory-service</module>
+        <module>payment-service</module>
+        <module>notification-service</module>
     </modules>
 
     <properties>
@@ -31,6 +36,11 @@
         <spring-boot.version>3.5.14</spring-boot.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <!-- Overrides the Spring Boot BOM's Lombok version: 1.18.36 fails to
+             compile under JDK 26 (com.sun.tools.javac.code.TypeTag :: UNKNOWN,
+             a field JDK 24+ removed) even though the project still targets
+             Java 21 bytecode. 1.18.42+ fixes this JDK-26-as-build-JDK case. -->
+        <lombok.version>1.18.42</lombok.version>
         <!--spring-cloud.eureka-client.version>4.1.2</spring-cloud.eureka-client.version>
         <spring-cloud.eureka-server.version>4.1.2</spring-cloud.eureka-server.version-->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -58,4 +68,35 @@
 
         </dependencies>
     </dependencyManagement>
+
+    <!-- ADR-0011 (doc/adr/ADR-0011-artifact-packaging-zip.md): release-zip
+         assembly, managed once here so each runnable service just adds the
+         bare <plugin> element (no repeated config) to opt in. -->
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <version>3.7.1</version>
+                    <configuration>
+                        <descriptors>
+                            <descriptor>${maven.multiModuleProjectDirectory}/src/assembly/release-zip.xml</descriptor>
+                        </descriptors>
+                        <appendAssemblyId>false</appendAssemblyId>
+                        <finalName>${project.artifactId}-${project.version}-release</finalName>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>build-release-zip</id>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>single</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
 </project>

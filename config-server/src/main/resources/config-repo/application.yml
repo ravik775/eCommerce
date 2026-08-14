@@ -1,0 +1,50 @@
+# Applies to every config-client service (Spring Cloud Config convention:
+# a file literally named "application.yml" with no profile/service suffix
+# is shared by all clients, regardless of spring.application.name).
+#
+# ADR-0023 (doc/adr/ADR-0023-correlation-trace-id.md): puts both IDs into
+# every log line's MDC, but nothing prints them without this pattern —
+# found and fixed via live testing, not assumed to "just work" because the
+# filter populates MDC.
+logging:
+  pattern:
+    level: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-}]"
+
+# ADR-0008 (K8s-native discovery in K8s; Eureka retained for Docker/local
+# dev only): without prefer-ip-address, Eureka registers instances under
+# the OS hostname (e.g. a Windows machine's *.mshome.net name), which the
+# gateway's Netty-based load balancer cannot resolve (NXDOMAIN) — found via
+# live gateway-routing verification, not assumed. Registering by IP makes
+# lb:// routing actually work across every service, not just the ones
+# tested first.
+eureka:
+  instance:
+    prefer-ip-address: true
+
+# ADR-0003 (doc/adr/ADR-0003-eventing-kafka-rabbitmq.md): Kafka for the
+# domain-event backbone, RabbitMQ for point-to-point task queues. Local dev
+# connection details only — see order-service.yml's credential note for
+# the same "Phase 7 replaces this" caveat.
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      properties:
+        spring.json.trusted.packages: "org.bgm.*"
+  rabbitmq:
+    host: localhost
+    port: 5673
+    username: ecommerce_dev
+    password: PRMbIw12h6JxrkkIruKqh65g
+
+  # ADR-0001 (Keycloak/OIDC IdP) / ADR-0025 (JWT + RBAC): every service
+  # validates the same Keycloak-issued JWT independently (ADR-0005 defense
+  # in depth) — this is the shared trust anchor, applied via common-lib's
+  # SecurityAutoConfiguration (org.bgm.common.security).
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8090/realms/ecom
+

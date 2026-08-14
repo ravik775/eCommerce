@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ecommerce.bgm.org/schemas/order-cancelled.schema.json",
+  "title": "order-cancelled",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "orderId", "reason", "occurredAt"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "integer" },
+    "reason": { "type": "string", "minLength": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  }
+}

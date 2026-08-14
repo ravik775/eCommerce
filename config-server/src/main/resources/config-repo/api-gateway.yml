@@ -1,5 +1,158 @@
+# Canonical API Gateway config. Consolidated from three redundant drafts
+# (api-gateway.yml / api-gateway2.yml / api-gateway-ratelimiter.yml) per
+# Phase 1 of the delivery plan.
+#
+# ADR-0005 (doc/adr/ADR-0005-api-gateway-boundary.md): the gateway owns
+# routing, edge rate limiting, and OIDC login termination; it is NOT the
+# sole authorization point — every backend service independently validates
+# the same JWT (Phase 4), so a request bypassing the gateway is still
+# rejected downstream.
+#
+# ADR-0009 (doc/adr/ADR-0009-rate-limiter-redis.md): rate limiting is
+# Redis-backed (not Resilience4j in-memory) because the gateway runs
+# multiple replicas — an in-memory limiter would let each replica enforce
+# its own separate cap, silently multiplying the effective rate limit.
 server:
   port: 8080
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  cloud:
+    gateway:
+      default-filters:
+        - name: Retry
+          args:
+            retries: 1
+            methods:
+              - GET
+            statuses:
+              - BAD_GATEWAY
+              - SERVICE_UNAVAILABLE
+              - GATEWAY_TIMEOUT
+        # ADR-0005: relays the access token from the gateway's own OIDC
+        # session to every downstream service call as `Authorization:
+        # Bearer <token>` — the BFF pattern. Every route gets this, not
+        # just order-service, since every backend service independently
+        # validates the JWT (ADR-0025's defense-in-depth resource servers).
+        - TokenRelay=
+
+      routes:
+        - id: order-service
+          uri: lb://ORDER-SERVICE
+          predicates:
+            - Path=/order/**,/order
+          filters:
+            - StripPrefix=1
+            - name: CircuitBreaker
+              args:
+                name: orderCircuit
+                fallbackUri: forward:/fallback/order
+                statusCodes:
+                  - INTERNAL_SERVER_ERROR
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@userKeyResolver}"
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+
+        # ADR-0028: edge-level admin gate. Matched before catalog-service-read
+        # below (Spring Cloud Gateway evaluates routes in declaration order) —
+        # mutating catalog calls are rejected here by role before reaching
+        # the load balancer; catalog-service's own @PreAuthorize("hasRole
+        # ('ADMIN')") (ADR-0025) still re-checks independently for any call
+        # that bypasses the gateway.
+        - id: catalog-service-admin
+          uri: lb://CATALOG-SERVICE
+          predicates:
+            - Path=/catalog/**
+            - Method=POST,PUT,DELETE
+          filters:
+            - StripPrefix=1
+            - RequireRole=ADMIN
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@userKeyResolver}"
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+
+        - id: catalog-service-read
+          uri: lb://CATALOG-SERVICE
+          predicates:
+            - Path=/catalog/**,/catalog
+          filters:
+            - StripPrefix=1
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@userKeyResolver}"
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+
+  # ADR-0001 (Keycloak/OIDC) / ADR-0017 (PKCE): the gateway is a
+  # confidential client (has a client secret, unlike the future SPA's
+  # public+PKCE client, ADR-0012) since it does the server-side
+  # Authorization Code flow as the BFF (ADR-0005). PKCE is still applied —
+  # Spring Security's reactive OAuth2 client enables it automatically
+  # against an authorization server that supports it (Keycloak does).
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ecommerce-gateway
+            client-secret: gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            # profile,email dropped: nothing in this codebase consumes
+            # those claims (KeycloakOidcUserService only ever reads
+            # realm_access from the access token JWT — see that class).
+            # With them present, Spring's UserInfo-endpoint fetch step
+            # failed with "missing_user_name_attribute" once discovery was
+            # replaced by explicit endpoints (found live, root cause not
+            # fully isolated within this session's time budget — an
+            # explicit user-name-attribute property alone did not resolve
+            # it). openid-only avoids the UserInfo call entirely, which
+            # this login flow never needed in the first place.
+            scope: openid
+        provider:
+          # Explicit endpoints, not issuer-uri: setting issuer-uri at all
+          # makes Spring's OAuth2ClientPropertiesRegistrationAdapter run
+          # OIDC discovery (an HTTP fetch of issuer-uri +
+          # /.well-known/openid-configuration) before applying any of
+          # these endpoint overrides — and in Docker Compose, that fetch
+          # target (whatever issuer-uri is set to) can't simultaneously be
+          # both container-reachable (for the fetch) and browser-reachable
+          # (for the `iss` claim on tokens the browser's login flow
+          # produces), since those are different hostnames on this
+          # network topology. Found live: crashed the gateway's
+          # ApplicationContext with "Connection refused" trying to fetch
+          # discovery via a browser-facing localhost URL that means
+          # nothing inside the container. Static endpoints sidestep
+          # discovery entirely — this authorization-uri stays
+          # browser-reachable (Docker Compose overrides the other three to
+          # the container-internal Keycloak address; see docker-compose.yml).
+          keycloak:
+            authorization-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/auth
+            token-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/certs
+            user-info-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/userinfo
+            user-name-attribute: sub
+            # RESOLVED (was "KNOWN OPEN ISSUE" — see git history for the
+            # full debugging trail if curious): the earlier failures here
+            # ("missing_user_name_attribute", then
+            # "invalid_user_info_response: Token verification failed")
+            # were NOT caused by this static-endpoint config — they were
+            # Keycloak itself rejecting the gateway's server-to-server
+            # UserInfo call over the container-internal address, a
+            # Host-header-based backchannel check independent of
+            # KC_HOSTNAME_STRICT. Fixed on the Keycloak container side
+            # with KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true (see
+            # docker-compose.yml's keycloak service). Verified live: full
+            # CUSTOMER/ADMIN OIDC login + RBAC flow works end-to-end
+            # through the fully containerized stack.
 
 resilience4j:
   circuitbreaker:
@@ -17,36 +170,6 @@ eureka:
     fetch-registry: true
     service-url:
       defaultZone: http://localhost:8086/eureka/
-
-spring:
-  cloud:
-    gateway:
-      default-filters:
-        - name: Retry
-          args:
-            retries: 1
-            methods:
-              - GET
-            statuses:
-              - BAD_GATEWAY
-              - SERVICE_UNAVAILABLE
-              - GATEWAY_TIMEOUT
-
-      routes:
-        - id: order-service
-          uri: lb://ORDER-SERVICE
-          predicates:
-            - Path=/order/**,/order
-
-          filters:
-            - StripPrefix=1
-
-            - name: CircuitBreaker
-              args:
-                name: orderCircuit
-                fallbackUri: forward:/fallback/order
-                statusCodes:
-                  - INTERNAL_SERVER_ERROR
 
 management:
   endpoints:

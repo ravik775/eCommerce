@@ -1,0 +1,3 @@
+org.bgm.common.correlation.CorrelationAutoConfiguration
+org.bgm.common.event.schema.EventSchemaAutoConfiguration
+org.bgm.common.security.SecurityAutoConfiguration

@@ -1,0 +1,82 @@
+# K8s-native replacement for config-server's api-gateway.yml gateway
+# route section (ADR-0008): lb://SERVICE-NAME (Eureka + Spring Cloud
+# LoadBalancer) becomes a direct K8s Service DNS name — kube-proxy
+# load-balances across a Service's endpoints on its own, so no client-side
+# discovery/load-balancer library is needed in this environment. Mounted
+# via SPRING_CONFIG_ADDITIONAL_LOCATION (see api-gateway.yaml Deployment)
+# since Spring Cloud Gateway's nested route/filter structure isn't
+# reasonably expressible as flat env vars.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-routes
+  namespace: ecom
+data:
+  application.yaml: |
+    spring:
+      cloud:
+        gateway:
+          routes:
+            - id: order-service
+              uri: http://order-service:8082
+              predicates:
+                - Path=/order/**,/order
+              filters:
+                - StripPrefix=1
+                - TokenRelay=
+                - name: CircuitBreaker
+                  args:
+                    name: orderCircuit
+                    fallbackUri: forward:/fallback/order
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+            - id: catalog-service-admin
+              uri: http://catalog-service:8083
+              predicates:
+                - Path=/catalog/**
+                - Method=POST,PUT,DELETE
+              filters:
+                - name: Retry
+                  args:
+                    retries: 1
+                    series: [SERVER_ERROR]
+                    methods: [GET]
+                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
+                - StripPrefix=1
+                - TokenRelay=
+                - RequireRole=ADMIN
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+            - id: catalog-service-read
+              uri: http://catalog-service:8083
+              predicates:
+                - Path=/catalog/**,/catalog
+              filters:
+                - name: Retry
+                  args:
+                    retries: 1
+                    series: [SERVER_ERROR]
+                    methods: [GET]
+                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
+                - StripPrefix=1
+                - TokenRelay=
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+    resilience4j:
+      circuitbreaker:
+        instances:
+          orderCircuit:
+            slidingWindowType: COUNT_BASED
+            slidingWindowSize: 2
+            minimumNumberOfCalls: 2
+            failureRateThreshold: 50
+            waitDurationInOpenState: 30s

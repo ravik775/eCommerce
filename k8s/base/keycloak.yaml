@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: keycloak }
+  template:
+    metadata:
+      labels: { app: keycloak }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0
+          args: ["start-dev", "--import-realm"]
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - secretRef: { name: keycloak-admin-secret }
+          env:
+            # Same pattern as Phase 5's Docker Compose fix (ADR-0026):
+            # KC_HOSTNAME pinned to the browser-facing address so every
+            # issued token's `iss` claim is stable regardless of which
+            # network path issued it; KC_HOSTNAME_BACKCHANNEL_DYNAMIC lets
+            # in-cluster server-to-server calls (gateway -> keycloak
+            # Service DNS) validate correctly without an issuer mismatch.
+            # No public Ingress for Keycloak yet (deferred, see Phase 6
+            # notes) — browser-facing verification uses
+            # `kubectl port-forward svc/keycloak 8090:8090`.
+            - { name: KC_HOSTNAME, value: "http://localhost:8090" }
+            - { name: KC_HOSTNAME_STRICT, value: "false" }
+            - { name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC, value: "true" }
+            - { name: KC_HTTP_ENABLED, value: "true" }
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 500m, memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+      volumes:
+        - name: realm-import
+          configMap: { name: keycloak-realm }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: ecom
+spec:
+  selector: { app: keycloak }
+  ports: [{ name: http, port: 8090, targetPort: 8080 }]

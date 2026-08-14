@@ -76,3 +76,64 @@
  ├── notification-service
  │
  └── docker
+
+
+--------------------------------------------------------------------------------------------
+Client
+  |
+  | GET /order/?arg=aa
+  v
+
++---------------------+
+| API Gateway         |
++---------------------+
+
+1. Route Match
+   Path=/order/**
+
+2. RequestRateLimiter
+   |
+   +--> 429 if limit exceeded
+
+3. Retry Filter
+   |
+   +--> Retry on 502/503/504
+
+4. Circuit Breaker
+   |
+   +--> Open?
+         |
+         +--> forward:/fallback/order
+
+5. StripPrefix=1
+   /order/?arg=aa
+      ↓
+   /?arg=aa
+
+6. ReactiveLoadBalancerClientFilter
+   lb://ORDER-SERVICE
+
+7. Eureka Client Cache Lookup
+   ORDER-SERVICE
+      ↓
+   [192.168.1.6:8082]
+
+8. Load Balancer Chooses Instance
+   (Round Robin)
+
+9. NettyRoutingFilter
+   |
+   +--> GET http://192.168.1.6:8082/?arg=aa
+
++---------------------+
+| ORDER-SERVICE       |
++---------------------+
+
+10. Bulkhead
+    Limit concurrent calls
+
+11. Business Logic
+
+12. Response
+
+Gateway → Client

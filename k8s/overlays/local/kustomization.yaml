@@ -1,0 +1,10 @@
+# Local dev overlay (Docker Desktop Kubernetes). No patches yet — base
+# already targets a single local cluster; this exists so the base/overlay
+# structure ADR-0021 calls for is real, not just base/ alone, and so a
+# later environment (e.g. a real cluster with different resource limits
+# or replica counts) has an obvious place to add overlay patches instead
+# of forking base/.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

@@ -1,0 +1,169 @@
+# ADR-0006: default-deny all ingress/egress in `ecom`, then explicit
+# allow rules matching the real call graph. DNS (kube-dns/CoreDNS in
+# kube-system) is allowed for every pod — without it, Service DNS
+# resolution itself breaks, which would masquerade as "network policy
+# working" when it's actually just DNS failing.
+#
+# LOCAL-DEV DEVIATION (see configmap-common.yaml): Postgres, Kafka, and
+# Keycloak run as standalone host containers, not pods, so they can't be
+# targeted by podSelector — egress to them uses an ipBlock rule against
+# Docker Desktop's host-gateway address (host.docker.internal resolves to
+# 192.168.65.254 on this machine; verified via `docker run --rm alpine
+# getent hosts host.docker.internal`). This is real least-privilege
+# weakening versus a podSelector rule: any pod allowed to reach that IP
+# can reach all three services' ports, not just the one it legitimately
+# needs, and a NetworkPolicy has no way to distinguish "the process
+# that's actually Postgres" from anything else that might listen on the
+# host — the true zero-trust model resumes once these run in-cluster
+# again (the real deployment target, ADR-0022).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ecom
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: ecom
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# api-gateway: ingress from anywhere (it's the edge — Ingress/port-forward
+# traffic isn't attributable to an in-cluster pod label), egress to every
+# backend service + Redis + Keycloak.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: api-gateway } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: catalog-service } }
+        - podSelector: { matchLabels: { app: redis } }
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Keycloak (host container)
+---
+# Data-owning app services: ingress only from api-gateway (never called
+# directly) + Kafka/RabbitMQ consumers reaching in via their own brokers
+# (broker connections are outbound FROM the app service, covered by
+# egress, not ingress). Egress to Postgres/Kafka/Keycloak is one ipBlock
+# rule (host container, see the LOCAL-DEV DEVIATION note above) rather
+# than three separate podSelector rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: order-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: order-service } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+  egress:
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: catalog-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: catalog-service } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+  egress:
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inventory-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: inventory-service } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: payment-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: payment-service } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notification-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: notification-service } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: rabbitmq } }
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-service-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: user-service } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+  egress:
+    - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
+---
+# Infra still in-cluster: ingress only from the app pods that legitimately
+# call them. (Postgres/Kafka/Keycloak policies removed — they're no
+# longer pods, see the LOCAL-DEV DEVIATION note above.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: rabbitmq } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: notification-service } } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: redis } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]

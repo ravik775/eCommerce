@@ -1,0 +1,17 @@
+# ADR-0011 (doc/adr/ADR-0011-artifact-packaging-zip.md): bundled into every
+# service's release zip as a starting-point config template. Contains no
+# secrets — real config comes from Spring Cloud Config Server (Compose) or
+# Kubernetes ConfigMaps/Secrets (K8s, ADR-0008). Copy to application.yml
+# next to the jar and edit only if running this jar standalone, outside
+# Compose/K8s.
+
+spring:
+  application:
+    name: ${project.artifactId}
+  config:
+    import: "optional:configserver:${SPRING_CONFIG_IMPORT_URI:http://localhost:8888}"
+
+eureka:
+  client:
+    service-url:
+      defaultZone: "${EUREKA_URI:http://localhost:8086/eureka/}"

@@ -1,0 +1,6 @@
+# OWASP ZAP baseline scan rule overrides (ADR-0010: doc/adr/ADR-0010-cicd-pipeline-sast-dast.md).
+# Format: <rule id><TAB><action: IGNORE|WARN|FAIL><TAB># comment
+# Empty/comment-only for now — the DAST stage is advisory-only until Phase 4
+# (doc/architecture/12-ci-cd-pipeline.md), so no rule suppressions are
+# needed yet. Add entries here only for confirmed false positives, never to
+# silence a real finding.
