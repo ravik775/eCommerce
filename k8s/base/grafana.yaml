@@ -72,6 +72,13 @@ data:
           "type": "stat",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
           "targets": [{ "expr": "sum(up)" }]
+        },
+        {
+          "id": 5, "title": "Orders per minute",
+          "type": "timeseries",
+          "description": "orders_total (ADR-0032), rate() over a 1m window. Zoom Grafana's time range picker (top right) to see the current peak window within the last 6h — that's this Prometheus instance's configured retention (--storage.tsdb.retention.time=6h, k8s/base/prometheus.yaml), a deliberate operational-monitoring tradeoff, not a bug. For peak-window analysis across a day/week/month/year (retrospective business analytics, not real-time ops), query order_service.orders directly by orderCreatedOn instead — Prometheus at this retention cannot answer that question, and pretending otherwise here would be misleading.",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+          "targets": [{ "expr": "sum(rate(orders_total[1m])) * 60" }]
         }
       ]
     }

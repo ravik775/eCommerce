@@ -41,9 +41,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.75rem 2rem; }
 .tab-panel.active { display: block; }
 
 .shop-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start; }
-.shop-side { display: flex; flex-direction: column; gap: 1.5rem; }
 
-#catalog, #cart, #orders, #tab-provider, #tab-admin {
+#catalog, #cart, #tab-orders, #tab-provider, #tab-admin {
   background: white;
   padding: 1.25rem 1.5rem;
   border-radius: 10px;
@@ -93,7 +92,7 @@ button:disabled { background: #d7dae0; color: #8a8f99; cursor: not-allowed; }
 #checkout { width: 100%; margin-top: .75rem; padding: .75rem; font-weight: 600; }
 #checkout-status, #provider-status, #restock-status { font-size: .85rem; color: #555; margin-top: .5rem; }
 
-#products-pager {
+#products-pager, #orders-pager {
   display: flex;
   align-items: center;
   gap: .75rem;
@@ -103,7 +102,7 @@ button:disabled { background: #d7dae0; color: #8a8f99; cursor: not-allowed; }
   font-size: .85rem;
   color: #555;
 }
-#products-pager button { padding: .35rem .7rem; }
+#products-pager button, #orders-pager button { padding: .35rem .7rem; }
 
 #provider-form, #restock-form {
   display: flex;

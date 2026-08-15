@@ -76,18 +76,46 @@ function switchTab(name) {
 
 // ADR-0031: status-only order history, refreshed on login and after
 // every successful checkout — no cancel/return actions, no line items.
-async function loadMyOrders() {
-  const res = await apiFetch(`/order/customer/${me.id}`);
+// Own tab + pagination (page/size, same pattern as the product catalog).
+const ORDERS_PAGE_SIZE = 10;
+let currentOrdersPage = 0;
+
+async function loadMyOrders(page = 0) {
+  currentOrdersPage = page;
+  const res = await apiFetch(`/order/customer/${me.id}?page=${page}&size=${ORDERS_PAGE_SIZE}`);
   if (!res.ok) return; // non-fatal: an empty/failed order list shouldn't block the rest of the page
-  const orders = await res.json();
+  const result = await res.json();
   const list = document.getElementById('order-list');
   list.innerHTML = '';
-  for (const o of orders.sort((a, b) => b.id - a.id)) {
+  for (const o of result.items) {
     const li = document.createElement('li');
     const when = new Date(o.orderCreatedOn).toLocaleString();
     li.textContent = `Order #${o.id} — $${o.totalAmount.toFixed(2)} — ${o.orderStatus} / ${o.paymentStatus} — ${when}`;
     list.appendChild(li);
   }
+  renderOrdersPager(result);
+}
+
+function renderOrdersPager(result) {
+  const pager = document.getElementById('orders-pager');
+  pager.innerHTML = '';
+  if (result.totalElements === 0) {
+    pager.textContent = 'No orders yet.';
+    return;
+  }
+  const isFirst = result.page <= 0;
+  const isLast = result.page >= result.totalPages - 1;
+  const prevBtn = document.createElement('button');
+  prevBtn.textContent = 'Prev';
+  prevBtn.disabled = isFirst;
+  prevBtn.onclick = () => loadMyOrders(currentOrdersPage - 1);
+  const nextBtn = document.createElement('button');
+  nextBtn.textContent = 'Next';
+  nextBtn.disabled = isLast;
+  nextBtn.onclick = () => loadMyOrders(currentOrdersPage + 1);
+  const label = document.createElement('span');
+  label.textContent = ` Page ${result.page + 1} of ${result.totalPages} (${result.totalElements} orders) `;
+  pager.append(prevBtn, label, nextBtn);
 }
 
 async function loadMyProducts() {

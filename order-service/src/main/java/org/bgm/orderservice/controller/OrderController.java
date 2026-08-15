@@ -5,15 +5,16 @@ import lombok.RequiredArgsConstructor;
 import org.bgm.common.idempotency.IdempotencyKeyResolver;
 import org.bgm.orderservice.dto.CreateOrderRequest;
 import org.bgm.orderservice.dto.OrderResponse;
+import org.bgm.orderservice.dto.PageResponse;
 import org.bgm.orderservice.exception.InvalidOrderActionException;
 import org.bgm.orderservice.model.OrderAction;
 import org.bgm.orderservice.service.IdempotencyService;
 import org.bgm.orderservice.service.OrderService;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/orders")
@@ -47,11 +48,16 @@ public class OrderController {
         return OrderResponse.from(orderService.updateStatus(orderId, parseAction(action)));
     }
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     @GetMapping("customer/{customerId}")
-    public List<OrderResponse> getOrdersForCustomer(@PathVariable("customerId") long customerId) {
-        return orderService.getOrdersForCustomer(customerId).stream()
-                .map(OrderResponse::from)
-                .toList();
+    public PageResponse<OrderResponse> getOrdersForCustomer(
+            @PathVariable("customerId") long customerId,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "size", defaultValue = "10") int size) {
+        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        var pageable = PageRequest.of(Math.max(page, 0), safeSize, Sort.by(Sort.Direction.DESC, "id"));
+        return PageResponse.from(orderService.getOrdersForCustomer(customerId, pageable).map(OrderResponse::from));
     }
 
     private OrderAction parseAction(String action) {

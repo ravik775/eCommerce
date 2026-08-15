@@ -17,6 +17,8 @@ import org.bgm.orderservice.model.OrderStatus;
 import org.bgm.orderservice.model.PaymentStatus;
 import org.bgm.orderservice.repository.OrderRepository;
 import org.slf4j.MDC;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +37,7 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final OrderEventPublisher eventPublisher;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     @Transactional
     public Order createOrder(CreateOrderRequest request) {
@@ -81,6 +84,18 @@ public class OrderService {
         );
         eventPublisher.publish(EventType.ORDER_CREATED, order.getId(), event.eventId(), event);
 
+        // ADR-0032: exposed to Prometheus as orders_total (Micrometer's
+        // PrometheusNamingConvention appends "_total" to counter names
+        // itself — found live that naming it "orders_created_total" here
+        // actually produced "orders_total" in Prometheus, not a doubled
+        // suffix, so the base name is just "orders"). The basis for the
+        // Grafana orders/minute panel. A dedicated counter rather than
+        // deriving from the generic http_server_requests metric: that one
+        // can't distinguish a genuinely successful order from a 400/403
+        // hitting the same route, and would break silently if the route
+        // path ever changes.
+        meterRegistry.counter("orders").increment();
+
         // Phase 7 audit trail: the order leg, joined to the login leg by
         // customerId (this realm's username — see AuditLogger's Javadoc)
         // and to the payment leg by orderId.
@@ -99,8 +114,8 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public List<Order> getOrdersForCustomer(long customerId) {
-        return orderRepository.findByCustomerId(customerId);
+    public Page<Order> getOrdersForCustomer(long customerId, Pageable pageable) {
+        return orderRepository.findByCustomerId(customerId, pageable);
     }
 
     @Transactional
