@@ -30,11 +30,15 @@ public class InventoryController {
 
     // Was open to any authenticated user (no @PreAuthorize at all) —
     // real gap, closed as part of Phase 8's provider feature: only
-    // ADMIN (any product) or PROVIDER (their own — catalog-service's
-    // InventoryServiceClient only calls this right after that same
-    // caller created the product, so ownership was already enforced
-    // one hop upstream) should be able to add stock.
-    @PreAuthorize("hasAnyRole('ADMIN','PROVIDER')")
+    // INVENTORY_ADMIN (any product) or PROVIDER (their own —
+    // catalog-service's InventoryServiceClient only calls this right
+    // after that same caller created the product, so ownership was
+    // already enforced one hop upstream) should be able to add stock.
+    // ADR-0033: INVENTORY_ADMIN, not the old catch-all ADMIN (which no
+    // longer carries operational privilege) — SUPER_ADMIN's JWT already
+    // carries INVENTORY_ADMIN via Keycloak composite-role expansion, so
+    // this doesn't need to list SUPER_ADMIN separately.
+    @PreAuthorize("hasAnyRole('INVENTORY_ADMIN','PROVIDER')")
     @PostMapping("/add")
     public ResponseEntity<Void> add(@Valid @RequestBody BulkInventoryRequest request) {
         inventoryService.add(request);

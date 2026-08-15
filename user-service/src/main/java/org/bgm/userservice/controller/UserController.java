@@ -60,7 +60,14 @@ public class UserController {
                             }
                         })
                         .collect(Collectors.toSet());
-        var user = userService.getOrCreateByKeycloakSubject(jwt.getSubject(), email, name, roles);
+        // This Keycloak deployment's tokens don't carry a "sub" claim
+        // (found live — confirmed on tokens from both the master and
+        // ecom realms) — jwt.getSubject() being silently null for every
+        // caller meant every /me call resolved to the SAME row (the
+        // first-ever user created, since a null lookup key matched a
+        // null-valued column). preferred_username is present and unique
+        // per user on every token actually decoded.
+        var user = userService.getOrCreateByKeycloakSubject(jwt.getClaimAsString("preferred_username"), email, name, roles);
         return UserResponse.from(user);
     }
 

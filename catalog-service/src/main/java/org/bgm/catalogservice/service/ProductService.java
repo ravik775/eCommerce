@@ -8,10 +8,13 @@ import org.bgm.catalogservice.exception.ProductNotFoundException;
 import org.bgm.catalogservice.model.Product;
 import org.bgm.catalogservice.model.ProductStatus;
 import org.bgm.catalogservice.repository.ProductRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestClientException;
 
 import java.time.Instant;
 import java.util.List;
@@ -21,50 +24,65 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class ProductService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductService.class);
+
     private final ProductRepository productRepository;
     private final InventoryServiceClient inventoryServiceClient;
 
-    // ADMIN-created products don't have a real provider — this fixed
-    // placeholder keeps the "provider name" display consistent instead
-    // of a blank/null value; see V5__add_provider_name.sql for the same
-    // placeholder backfilled onto pre-existing rows.
+    // CATALOG_ADMIN-created products don't have a real provider — this
+    // fixed placeholder keeps the "provider name" display consistent
+    // instead of a blank/null value; see V5__add_provider_name.sql for
+    // the same placeholder backfilled onto pre-existing rows.
     private static final String ADMIN_PROVIDER_NAME = "Demo Vendor Co.";
 
     /**
-     * @param callerId       Keycloak subject of the authenticated caller
-     * @param callerIsAdmin  true for ADMIN (no ownership restriction), false for PROVIDER
-     * @param callerName     display name (JWT "name" claim) shown alongside the product
-     * @param bearerToken    forwarded to inventory-service — see InventoryServiceClient's Javadoc
+     * @param callerId            Keycloak subject of the authenticated caller
+     * @param callerIsCatalogAdmin true for CATALOG_ADMIN (no ownership restriction), false for PROVIDER
+     * @param callerName          display name (JWT "name" claim) shown alongside the product
+     * @param bearerToken         forwarded to inventory-service — see InventoryServiceClient's Javadoc
      */
     @Transactional
-    public Product create(ProductRequest request, String callerId, boolean callerIsAdmin, String callerName, String bearerToken) {
+    public Product create(ProductRequest request, String callerId, boolean callerIsCatalogAdmin, String callerName, String bearerToken) {
         Product product = new Product();
         applyRequest(product, request);
         Instant now = Instant.now();
         product.setCreatedAt(now);
         product.setUpdatedAt(now);
         product.setActive(true);
-        // ADMIN-created products stay owner-less (today's whole catalog,
-        // still manageable by any admin) — only PROVIDER-created ones
-        // get an owner.
-        product.setProviderId(callerIsAdmin ? null : callerId);
-        product.setProviderName(callerIsAdmin ? ADMIN_PROVIDER_NAME : callerName);
-        // ADMIN products go live immediately (matches the pre-Phase-8
-        // catalog's zero-gate behavior); PROVIDER ones start DRAFT and
-        // need an explicit publish() call — see ProductStatus's Javadoc.
-        product.setStatus(callerIsAdmin ? ProductStatus.LISTED : ProductStatus.DRAFT);
+        // CATALOG_ADMIN-created products stay owner-less (today's whole
+        // catalog, still manageable by any catalog admin) — only
+        // PROVIDER-created ones get an owner.
+        product.setProviderId(callerIsCatalogAdmin ? null : callerId);
+        product.setProviderName(callerIsCatalogAdmin ? ADMIN_PROVIDER_NAME : callerName);
+        // CATALOG_ADMIN products go live immediately (matches the
+        // pre-Phase-8 catalog's zero-gate behavior); PROVIDER ones start
+        // DRAFT and need an explicit publish() call — see ProductStatus's
+        // Javadoc.
+        product.setStatus(callerIsCatalogAdmin ? ProductStatus.LISTED : ProductStatus.DRAFT);
         product = productRepository.save(product);
 
         if (request.quantity() != null && request.quantity() > 0) {
-            inventoryServiceClient.addStock(product.getId(), request.quantity(), bearerToken);
+            // ADR-0033: catalog and inventory privilege are now separate
+            // roles — a CATALOG_ADMIN-only caller's token doesn't carry
+            // INVENTORY_ADMIN, so this call can legitimately 403. That's
+            // the intended separation of duties, not a bug — but it must
+            // not fail the whole product creation (which already
+            // committed the product row). Logged, not swallowed
+            // silently: an operator needs to know stock wasn't seeded.
+            try {
+                inventoryServiceClient.addStock(product.getId(), request.quantity(), bearerToken);
+            } catch (RestClientException e) {
+                log.warn("Product {} created but initial stock seeding failed (caller likely lacks INVENTORY_ADMIN): {}",
+                        product.getId(), e.getMessage());
+            }
         }
         return product;
     }
 
     @Transactional
-    public Product update(long id, ProductRequest request, String callerId, boolean callerIsAdmin) {
+    public Product update(long id, ProductRequest request, String callerId, boolean callerIsCatalogAdmin) {
         Product product = get(id);
-        requireOwnerOrAdmin(product, callerId, callerIsAdmin);
+        requireOwnerOrAdmin(product, callerId, callerIsCatalogAdmin);
         applyRequest(product, request);
         product.setUpdatedAt(Instant.now());
         return productRepository.save(product);
@@ -72,9 +90,9 @@ public class ProductService {
 
     /** Moves a DRAFT product to LISTED — the one explicit gate a provider's product needs to pass. */
     @Transactional
-    public Product publish(long id, String callerId, boolean callerIsAdmin) {
+    public Product publish(long id, String callerId, boolean callerIsCatalogAdmin) {
         Product product = get(id);
-        requireOwnerOrAdmin(product, callerId, callerIsAdmin);
+        requireOwnerOrAdmin(product, callerId, callerIsCatalogAdmin);
         product.setStatus(ProductStatus.LISTED);
         product.setUpdatedAt(Instant.now());
         return productRepository.save(product);
@@ -98,16 +116,16 @@ public class ProductService {
 
     /** Soft delete — keeps the product row (order history references it) but hides it from browse/search. */
     @Transactional
-    public void deactivate(long id, String callerId, boolean callerIsAdmin) {
+    public void deactivate(long id, String callerId, boolean callerIsCatalogAdmin) {
         Product product = get(id);
-        requireOwnerOrAdmin(product, callerId, callerIsAdmin);
+        requireOwnerOrAdmin(product, callerId, callerIsCatalogAdmin);
         product.setActive(false);
         product.setUpdatedAt(Instant.now());
         productRepository.save(product);
     }
 
-    private void requireOwnerOrAdmin(Product product, String callerId, boolean callerIsAdmin) {
-        if (callerIsAdmin) {
+    private void requireOwnerOrAdmin(Product product, String callerId, boolean callerIsCatalogAdmin) {
+        if (callerIsCatalogAdmin) {
             return;
         }
         if (!Objects.equals(product.getProviderId(), callerId)) {

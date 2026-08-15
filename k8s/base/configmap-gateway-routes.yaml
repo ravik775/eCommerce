@@ -121,22 +121,21 @@ data:
                 # product, same split of responsibility this filter's
                 # own class Javadoc already documents.
                 #
-                # name/args form, NOT the `RequireRole=ADMIN,PROVIDER`
-                # shortcut string: Spring Cloud Gateway's shortcut
-                # notation splits on comma as the ARGUMENT delimiter
-                # (`Filter=arg1,arg2`), and this factory only declares
-                # one positional field ("role") — so the shortcut form
-                # silently bound role="ADMIN" and dropped ",PROVIDER"
-                # entirely. Found live via the new ACCESS_DENIED audit
-                # log line showing requiredRoles=[ROLE_ADMIN] only, which
-                # means every PROVIDER request had been 403'd at the
-                # gateway edge this whole time despite catalog-service's
-                # own @PreAuthorize correctly allowing PROVIDER. The
-                # name/args map form passes "ADMIN,PROVIDER" as one
-                # literal string value with no comma-splitting ambiguity.
+                # name/args form, NOT the `RequireRole=X,Y` shortcut
+                # string: Spring Cloud Gateway's shortcut notation splits
+                # on comma as the ARGUMENT delimiter (`Filter=arg1,arg2`),
+                # and this factory only declares one positional field
+                # ("role") — so the shortcut form silently drops every
+                # role after the first. Found live via the ACCESS_DENIED
+                # audit log line showing requiredRoles=[ROLE_ADMIN] only.
+                #
+                # ADR-0033: CATALOG_ADMIN, not the old catch-all ADMIN
+                # (no longer operational) — SUPER_ADMIN is a Keycloak
+                # composite role, so its JWT already carries CATALOG_ADMIN
+                # via composite expansion and doesn't need listing here.
                 - name: RequireRole
                   args:
-                    role: ADMIN,PROVIDER
+                    role: CATALOG_ADMIN,PROVIDER
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@userKeyResolver}"
@@ -201,9 +200,10 @@ data:
                 - TokenRelay=
                 # See catalog-service-admin route above for why this must
                 # be the name/args form, not the comma-shortcut string.
+                # ADR-0033: INVENTORY_ADMIN, not ADMIN.
                 - name: RequireRole
                   args:
-                    role: ADMIN,PROVIDER
+                    role: INVENTORY_ADMIN,PROVIDER
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@userKeyResolver}"
