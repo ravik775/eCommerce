@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage build for catalog-service (Phase 5, ADR-0026).
 # Build context must be the repo root, not this directory — the Maven
 # reactor needs every module's pom.xml present to resolve the dependency
@@ -18,7 +19,14 @@ COPY order-service order-service
 COPY payment-service payment-service
 COPY service-discovery service-discovery
 COPY user-service user-service
-RUN chmod +x mvnw && ./mvnw -q -pl catalog-service -am package -DskipTests -Dassembly.skipAssembly=true
+# Cache mount, not a layer: persists ~/.m2 across builds even when an
+# upstream COPY layer invalidates (any module's source changing busts
+# every other service's Dockerfile cache too, since all 9 modules are
+# copied into every build context) — without this, a one-line change in
+# any module forced a full from-scratch dependency-resolution+compile of
+# the whole reactor for every service, observed taking ~5min each.
+RUN --mount=type=cache,target=/root/.m2 \
+    chmod +x mvnw && ./mvnw -q -pl catalog-service -am package -DskipTests -Dassembly.skipAssembly=true
 RUN mkdir -p /workspace/extracted && \
     java -Djarmode=layertools -jar /workspace/catalog-service/target/catalog-service-*.jar extract --destination /workspace/extracted
 

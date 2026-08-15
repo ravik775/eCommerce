@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage build for user-service (Phase 5, ADR-0026).
 # Build context must be the repo root, not this directory — the Maven
 # reactor needs every module's pom.xml present to resolve the dependency
@@ -18,7 +19,8 @@ COPY order-service order-service
 COPY payment-service payment-service
 COPY service-discovery service-discovery
 COPY user-service user-service
-RUN chmod +x mvnw && ./mvnw -q -pl user-service -am package -DskipTests -Dassembly.skipAssembly=true
+RUN --mount=type=cache,target=/root/.m2 \
+    chmod +x mvnw && ./mvnw -q -pl user-service -am package -DskipTests -Dassembly.skipAssembly=true
 RUN mkdir -p /workspace/extracted && \
     java -Djarmode=layertools -jar /workspace/user-service/target/user-service-*.jar extract --destination /workspace/extracted
 

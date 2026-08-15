@@ -49,7 +49,14 @@ public class SecurityConfig {
         http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .authorizeExchange(exchange -> exchange
-                        .pathMatchers("/actuator/health").permitAll()
+                        // Phase 7: Prometheus scrapes this gateway's own
+                        // /actuator/prometheus directly (no separate
+                        // management port needed here — the gateway
+                        // never enforced inbound mTLS to begin with).
+                        // Without this exclusion, the scrape request hit
+                        // the OAuth2 login redirect instead of metrics —
+                        // found live via Prometheus's scrape error log.
+                        .pathMatchers("/actuator/health", "/actuator/prometheus").permitAll()
                         .anyExchange().authenticated())
                 // Maps realm_access.roles onto the session's OidcUser (see
                 // KeycloakOidcUserService) so RequireRoleGatewayFilterFactory

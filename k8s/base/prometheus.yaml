@@ -1,0 +1,111 @@
+# Phase 7 (SOC2 observability): scrapes every service's /actuator/prometheus
+# endpoint. Static scrape targets (not Kubernetes service-discovery
+# relabeling) — this cluster has 9 known, fixed service names, so the
+# extra complexity of K8s SD + relabel_configs buys nothing here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: ecom
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: 'api-gateway'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['api-gateway:8080']
+      # Every other app service enforces inbound mTLS on its main port
+      # (ADR-0002) — actuator lives on a separate plain-HTTP management
+      # port instead (MANAGEMENT_SERVER_PORT, see each service's
+      # Deployment) precisely so Prometheus doesn't need a SPIFFE client
+      # cert to scrape metrics.
+      - job_name: 'catalog-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['catalog-service:9083']
+      - job_name: 'inventory-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['inventory-service:9084']
+      - job_name: 'notification-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['notification-service:9087']
+      - job_name: 'order-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['order-service:9082']
+      - job_name: 'payment-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['payment-service:9085']
+      - job_name: 'user-service'
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ['user-service:9081']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus }
+  template:
+    metadata:
+      labels: { app: prometheus }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.1.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=6h
+          ports: [{ containerPort: 9090 }]
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+            - { name: data, mountPath: /prometheus }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9090 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: 9090 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+      volumes:
+        - { name: config, configMap: { name: prometheus-config } }
+        # emptyDir, not a PVC: this is a dev-local monitoring stack with
+        # a short 6h retention (see --storage.tsdb.retention.time
+        # above), not a durable metrics store — matches the same
+        # local-dev resource-saving posture as Phase 6a/6b's other
+        # deliberate deviations from the "everything persistent" model.
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: ecom
+spec:
+  selector: { app: prometheus }
+  ports: [{ port: 9090, targetPort: 9090 }]

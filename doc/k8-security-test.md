@@ -97,7 +97,7 @@ Documented in `k8s/base/configmap-common.yaml` and `k8s/base/kustomization.yaml`
 
 **Gotcha hit while starting these**: Git Bash on Windows mangles `-v host:container` Docker volume-mount arguments (auto path-conversion turns `/opt/keycloak/data/import` into a Windows path and corrupts the source path with a stray `;C`). Fixed by prefixing `MSYS_NO_PATHCONV=1` before any `docker run -v ...` command run from Git Bash — without it, Keycloak's `--import-realm` silently imports nothing (only the built-in `master` realm exists, `ecom` 404s) with no error logged.
 
-## 7. SPIRE infrastructure (Phase 6b) — 7 real bugs found and fixed live
+## 7. SPIRE infrastructure (Phase 6b) — 8 real bugs found and fixed live
 
 Deployed to the `spire` namespace (`k8s/base/spire/`, `privileged` PSS — deliberately not `restricted` like `ecom`, see that directory's `namespace.yaml` comment). Full bug list and rationale: `doc/adr/ADR-0002-zero-trust-spire-app-level.md`'s "Live deployment verification" section — not duplicated here, but summarized:
 
@@ -108,15 +108,17 @@ Deployed to the `spire` namespace (`k8s/base/spire/`, `privileged` PSS — delib
 5. `k8s_psat` node attestation needs an audience-scoped projected ServiceAccount token — not automatic.
 6. SPIFFE CSI Driver needs `-node-id`, sourced from the Downward API.
 7. CSI driver's own socket path and kubelet's registration path pointed at two different hostPath directories — unified into one.
+8. Registration entries can't be created via a K8s Job at all — `spire-server`'s image is fully distroless (no shell). Registration is done via `scripts/spire-register.sh` instead (plain `docker run` against the same hostPath admin socket, not `kubectl exec`).
 
-**Result**: `spire-server` stable (1/1), `spire-agent` successfully node-attested (`spiffe://ecommerce.local/spire/agent/k8s_psat/docker-desktop/...`, serving the Workload API), `spiffe-csi-driver` steady at 2/2 with zero restarts.
+**Result**: `spire-server` stable (1/1), `spire-agent` successfully node-attested (`spiffe://ecommerce.local/spire/agent/k8s_psat/docker-desktop/...`, serving the Workload API), `spiffe-csi-driver` steady at 2/2 with zero restarts, registration entries created for `catalog-service` and `api-gateway`.
 
 ```bash
 kubectl get pods -n spire
 kubectl logs -n spire -l app=spire-agent --tail=20   # look for "Node attestation was successful"
+bash scripts/spire-register.sh                       # idempotent; safe to re-run
 ```
 
-**Not yet done** (next checkpoint): `common-lib`'s `spiffe-mtls` module (Java code consuming the Workload API via a CSI ephemeral volume from an `ecom` pod), wiring it into services, then the raw-TLS-rejection and SVID-rotation DoD tests from Phase 6b.
+**Not yet done** (next checkpoint): wire `spiffe.mtls.enabled=true` + the CSI ephemeral volume mount into catalog-service (inbound) and api-gateway (outbound, already has the registration entries), update the gateway route URI to `https://`, rebuild both images, redeploy, then run the raw-TLS-rejection and SVID-rotation DoD tests.
 
 ## Related
 

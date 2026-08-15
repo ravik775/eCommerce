@@ -34,7 +34,11 @@ data:
                     redis-rate-limiter.replenishRate: 5
                     redis-rate-limiter.burstCapacity: 10
             - id: catalog-service-admin
-              uri: http://catalog-service:8083
+              # https, not http: catalog-service enforces inbound mTLS
+              # (ADR-0002, SPIFFE_MTLS_ENABLED=true) — this gateway also
+              # has SPIFFE_MTLS_ENABLED=true, so its proxy client
+              # presents a valid client SVID on every hop here.
+              uri: https://catalog-service:8083
               predicates:
                 - Path=/catalog/**
                 - Method=POST,PUT,DELETE
@@ -54,7 +58,11 @@ data:
                     redis-rate-limiter.replenishRate: 5
                     redis-rate-limiter.burstCapacity: 10
             - id: catalog-service-read
-              uri: http://catalog-service:8083
+              # https, not http: catalog-service enforces inbound mTLS
+              # (ADR-0002, SPIFFE_MTLS_ENABLED=true) — this gateway also
+              # has SPIFFE_MTLS_ENABLED=true, so its proxy client
+              # presents a valid client SVID on every hop here.
+              uri: https://catalog-service:8083
               predicates:
                 - Path=/catalog/**,/catalog
               filters:

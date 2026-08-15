@@ -20,32 +20,45 @@ spec:
         - name: inventory-service
           image: ecomd-inventory-service:latest
           imagePullPolicy: IfNotPresent
-          ports: [{ containerPort: 8084 }]
+          ports: [{ containerPort: 8084 }, { containerPort: 9084 }]
           envFrom:
             - configMapRef: { name: common-config }
             - secretRef: { name: app-datasource-secret }
           env:
             - { name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://host.docker.internal:5432/ecommerce?currentSchema=inventory_service" }
             - { name: SERVER_PORT, value: "8084" }
+            # Phase 7: actuator/Prometheus on a separate plain-HTTP port
+            # — see catalog-service.yaml for the full rationale.
+            - { name: MANAGEMENT_SERVER_PORT, value: "9084" }
             # Keeps JVM heap inside the container's memory limit below —
             # same reasoning as the Dockerfile's JAVA_TOOL_OPTIONS, but
             # explicit here since the K8s memory limit (not the
             # container's cgroup default) is the real ceiling now.
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=75.0" }
+            # ADR-0002: enables common-lib's SPIFFE mTLS auto-config —
+            # inbound Tomcat connector now requires a client SVID.
+            - { name: SPIFFE_MTLS_ENABLED, value: "true" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
             limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
           readinessProbe:
             tcpSocket: { port: 8084 }
-            initialDelaySeconds: 30
+            initialDelaySeconds: 100
             periodSeconds: 10
           livenessProbe:
             tcpSocket: { port: 8084 }
-            initialDelaySeconds: 45
+            initialDelaySeconds: 220
             periodSeconds: 15
+      volumes:
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
 ---
 apiVersion: v1
 kind: Service
@@ -54,4 +67,4 @@ metadata:
   namespace: ecom
 spec:
   selector: { app: inventory-service }
-  ports: [{ port: 8084, targetPort: 8084 }]
+  ports: [{ name: http, port: 8084, targetPort: 8084 }, { name: metrics, port: 9084, targetPort: 9084 }]

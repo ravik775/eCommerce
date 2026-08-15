@@ -76,6 +76,11 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+    # Phase 7: Prometheus scrapes /actuator/prometheus on the separate
+    # plain-HTTP management port (9082) — scoped to that port only, not
+    # a blanket allow, since the main port (8082) still requires mTLS.
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9082 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
 ---
@@ -89,6 +94,8 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9083 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
 ---
@@ -100,7 +107,9 @@ metadata:
 spec:
   podSelector: { matchLabels: { app: inventory-service } }
   policyTypes: [Ingress, Egress]
-  ingress: []
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9084 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
 ---
@@ -112,7 +121,9 @@ metadata:
 spec:
   podSelector: { matchLabels: { app: payment-service } }
   policyTypes: [Ingress, Egress]
-  ingress: []
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9085 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
 ---
@@ -124,7 +135,9 @@ metadata:
 spec:
   podSelector: { matchLabels: { app: notification-service } }
   policyTypes: [Ingress, Egress]
-  ingress: []
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9087 }]
   egress:
     - to:
         - podSelector: { matchLabels: { app: rabbitmq } }
@@ -140,6 +153,8 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+    - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
+      ports: [{ protocol: TCP, port: 9081 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
 ---
@@ -167,3 +182,42 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
+---
+# Phase 7: Prometheus scrapes every service's metrics endpoint (egress);
+# only Grafana queries Prometheus's own API (ingress) — not exposed
+# beyond that, same least-privilege pattern as every other service here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: prometheus } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: grafana } } }]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: catalog-service } }
+        - podSelector: { matchLabels: { app: inventory-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: payment-service } }
+        - podSelector: { matchLabels: { app: user-service } }
+---
+# Grafana: ingress from anywhere (dashboard access, same "edge" reasoning
+# as api-gateway — Ingress/port-forward traffic isn't attributable to an
+# in-cluster pod label), egress to Prometheus only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: grafana } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: prometheus } } }]

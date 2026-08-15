@@ -44,26 +44,35 @@ spec:
             - { name: SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_USER_INFO_URI, value: "http://host.docker.internal:8090/realms/ecom/protocol/openid-connect/userinfo" }
             - { name: SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_USER_NAME_ATTRIBUTE, value: "sub" }
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=75.0" }
+            # ADR-0002: enables common-lib's SPIFFE mTLS auto-config —
+            # this pod's proxy client now presents a client SVID and
+            # verifies the peer's SVID on every outbound route call.
+            - { name: SPIFFE_MTLS_ENABLED, value: "true" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
             limits: { cpu: 500m, memory: 512Mi }
           volumeMounts:
             - name: gateway-routes
               mountPath: /config
+            - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
           readinessProbe:
             tcpSocket: { port: 8080 }
-            initialDelaySeconds: 30
+            initialDelaySeconds: 100
             periodSeconds: 10
           livenessProbe:
             tcpSocket: { port: 8080 }
-            initialDelaySeconds: 45
+            initialDelaySeconds: 220
             periodSeconds: 15
       volumes:
         - name: gateway-routes
           configMap: { name: gateway-routes }
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
 ---
 apiVersion: v1
 kind: Service

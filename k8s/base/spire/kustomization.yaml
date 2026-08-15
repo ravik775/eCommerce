@@ -9,3 +9,7 @@ resources:
   - server.yaml
   - agent.yaml
   - csi-driver.yaml
+# Registration entries are NOT applied via kustomize/a K8s Job — see
+# scripts/spire-register.sh and its header comment for why (the
+# ghcr.io/spiffe/spire-server image is fully distroless, no shell, so a
+# Job running shell logic against it can never work at all).

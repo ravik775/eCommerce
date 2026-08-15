@@ -1,3 +1,7 @@
 org.bgm.common.correlation.CorrelationAutoConfiguration
 org.bgm.common.event.schema.EventSchemaAutoConfiguration
 org.bgm.common.security.SecurityAutoConfiguration
+org.bgm.common.spiffe.SpiffeMtlsAutoConfiguration
+org.bgm.common.spiffe.SpiffeInboundMtlsAutoConfiguration
+org.bgm.common.spiffe.SpiffeOutboundMtlsAutoConfiguration
+org.bgm.common.spiffe.SpiffeGatewayMtlsAutoConfiguration

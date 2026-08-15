@@ -41,3 +41,12 @@ data:
   # instead of localhost) — same pattern as Phase 5's Docker Compose fix.
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: "http://localhost:8090/realms/ecom"
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWKSETURI: "http://host.docker.internal:8090/realms/ecom/protocol/openid-connect/certs"
+  # Phase 7: exposes /actuator/prometheus for scraping (common-lib now
+  # brings spring-boot-starter-actuator + micrometer-registry-prometheus
+  # to every service). health stays enabled for the existing tcpSocket
+  # readiness/liveness probes' sake, though those don't use this
+  # endpoint directly — kept minimal, not "expose everything", since an
+  # open actuator surface is itself a real attack surface (env/beans/etc
+  # endpoints are NOT in this include list on purpose).
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,prometheus"
+  MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: "true"

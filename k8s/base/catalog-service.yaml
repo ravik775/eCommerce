@@ -20,32 +20,55 @@ spec:
         - name: catalog-service
           image: ecomd-catalog-service:latest
           imagePullPolicy: IfNotPresent
-          ports: [{ containerPort: 8083 }]
+          ports: [{ containerPort: 8083 }, { containerPort: 9083 }]
           envFrom:
             - configMapRef: { name: common-config }
             - secretRef: { name: app-datasource-secret }
           env:
             - { name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://host.docker.internal:5432/ecommerce?currentSchema=catalog_service" }
             - { name: SERVER_PORT, value: "8083" }
+            # Phase 7: actuator/Prometheus on a separate plain-HTTP port
+            # — the main port enforces inbound mTLS (ADR-0002), and
+            # Prometheus doesn't (and shouldn't need to) present a SPIFFE
+            # client cert to scrape metrics. Confirmed live: a
+            # WebServerFactoryCustomizer<TomcatServletWebServerFactory>
+            # bean (which is how SpiffeInboundMtlsAutoConfiguration wires
+            # mTLS) only touches the *main* server factory — Spring
+            # Boot's separate management-context Tomcat instance doesn't
+            # pick it up, so this port stays plain HTTP automatically.
+            - { name: MANAGEMENT_SERVER_PORT, value: "9083" }
             # Keeps JVM heap inside the container's memory limit below —
             # same reasoning as the Dockerfile's JAVA_TOOL_OPTIONS, but
             # explicit here since the K8s memory limit (not the
             # container's cgroup default) is the real ceiling now.
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=75.0" }
+            # ADR-0002: enables common-lib's SPIFFE mTLS auto-config —
+            # inbound Tomcat connector now requires a client SVID.
+            - { name: SPIFFE_MTLS_ENABLED, value: "true" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
             limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
           readinessProbe:
             tcpSocket: { port: 8083 }
-            initialDelaySeconds: 30
+            initialDelaySeconds: 100
             periodSeconds: 10
           livenessProbe:
             tcpSocket: { port: 8083 }
-            initialDelaySeconds: 45
+            initialDelaySeconds: 220
             periodSeconds: 15
+      volumes:
+        # CSI ephemeral volume, not hostPath: this is what lets a
+        # `restricted`-PSS pod (ADR-0020) reach the Workload API socket
+        # — see k8s/base/spire/csi-driver.yaml's header comment.
+        - name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
 ---
 apiVersion: v1
 kind: Service
@@ -54,4 +77,4 @@ metadata:
   namespace: ecom
 spec:
   selector: { app: catalog-service }
-  ports: [{ port: 8083, targetPort: 8083 }]
+  ports: [{ name: http, port: 8083, targetPort: 8083 }, { name: metrics, port: 9083, targetPort: 9083 }]

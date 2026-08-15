@@ -63,6 +63,14 @@ data:
       trust_domain = "ecommerce.local"
       data_dir = "/run/spire/data"
       log_level = "INFO"
+      # Moved off the default /tmp/spire-server/private/api.sock (pod-
+      # local, unreachable from anywhere else) onto a hostPath-backed
+      # directory instead, so a separate one-shot registration Job can
+      # reach the same admin socket — needed because kubectl exec is
+      # broken on this cluster (see doc/k8-security-test.md's
+      # environment note), so `spire-server entry create` can't be run
+      # interactively inside this pod.
+      socket_path = "/run/spire/server-admin/api.sock"
       ca_subject = {
         country = ["US"],
         organization = ["ecommerce-local-dev"],
@@ -126,6 +134,28 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # hostPath directories are created root-owned by kubelet — found
+        # live via "bind: permission denied" once spire-server (uid
+        # 1000, non-root) tried to create its admin socket there. A
+        # root init container fixing ownership once at startup is the
+        # standard workaround for this class of hostPath permission
+        # issue, isolated to just this one step.
+        - name: fix-admin-socket-dir-perms
+          image: busybox:1.37
+          command: ["sh", "-c", "chown -R 1000:1000 /run/spire/server-admin"]
+          securityContext:
+            # Pod-level runAsNonRoot: true (below) must be explicitly
+            # overridden here too — found live via
+            # CreateContainerConfigError, Kubernetes rejects runAsUser:
+            # 0 alone as contradicting an inherited runAsNonRoot: true.
+            runAsNonRoot: false
+            runAsUser: 0
+          volumeMounts:
+            - { name: server-admin-socket, mountPath: /run/spire/server-admin }
+          resources:
+            requests: { cpu: 25m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 32Mi }
       containers:
         - name: spire-server
           image: ghcr.io/spiffe/spire-server:1.11.0
@@ -135,6 +165,7 @@ spec:
           volumeMounts:
             - { name: spire-config, mountPath: /run/spire/config, readOnly: true }
             - { name: spire-data, mountPath: /run/spire/data }
+            - { name: server-admin-socket, mountPath: /run/spire/server-admin }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: 300m, memory: 512Mi }
@@ -147,6 +178,12 @@ spec:
             periodSeconds: 10
       volumes:
         - { name: spire-config, configMap: { name: spire-server-config } }
+        - name: server-admin-socket
+          # Shared with the registration.yaml Job via the same hostPath —
+          # see server.conf's socket_path comment above for why.
+          hostPath:
+            path: /run/spire/server-admin
+            type: DirectoryOrCreate
   volumeClaimTemplates:
     - metadata: { name: spire-data }
       spec:

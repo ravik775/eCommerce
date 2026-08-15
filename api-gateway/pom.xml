@@ -32,6 +32,24 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
+        <!-- ADR-0002: transitively pulling in java-spiffe-provider (via
+             common-lib) brings the real io.grpc:grpc-api onto this
+             module's classpath, which satisfies Spring Cloud Gateway's
+             own (coarser) @ConditionalOnClass guard for its optional
+             gRPC-JSON-transcoding filter (GrpcSslConfigurer) — but that
+             bean's actual construction needs io.grpc.netty.NettyChannelBuilder
+             from the real (unshaded) grpc-netty artifact, which isn't
+             otherwise present (only java-spiffe-provider's internal
+             grpc-netty-shaded is). Without this, the gateway fails to
+             start with NoClassDefFoundError on every boot — found live
+             on first mTLS-enabled deploy. This module doesn't use gRPC
+             JSON transcoding itself; the dependency exists purely to let
+             that upstream bean construct successfully. -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty</artifactId>
+            <version>1.80.0</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-config</artifactId>
@@ -63,10 +81,13 @@
             <artifactId>spring-cloud-starter-gateway</artifactId>
             <version>4.2.1</version>
         </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
+        <!-- actuator + micrometer-registry-prometheus now come from
+             common-lib (Phase 7) — was previously declared here directly
+             plus a malformed, effectively-disabled commented-out
+             prometheus dependency block (missing the closing dash on its
+             opening comment tag, so it was never actually active).
+             Removed rather than fixed in place, since common-lib already
+             covers it for every service. -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-circuitbreaker-reactor-resilience4j</artifactId>
@@ -86,16 +107,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-oauth2-client</artifactId>
         </dependency>
-        <!--dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot</artifactId>
-        </dependency-->
-        <!-- https://mvnrepository.com/artifact/io.micrometer/micrometer-registry-prometheus -->
-        <!--dependency->
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.14.5</version>
-        </dependency-->
     </dependencies>
     <dependencyManagement>
         <dependencies>

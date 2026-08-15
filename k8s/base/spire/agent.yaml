@@ -111,7 +111,16 @@ spec:
       labels: { app: spire-agent }
     spec:
       serviceAccountName: spire-agent
-      hostPID: false
+      # Required for the k8s WorkloadAttestor plugin: it identifies the
+      # calling process via SO_PEERCRED (host PID number), then reads
+      # /proc/<pid>/cgroup to map it to a pod/container. With hostPID:
+      # false the agent's own PID namespace can't see any other pod's
+      # process at all, so every attestation fails with "could not
+      # resolve caller information" — found live (2026-08-14), confirmed
+      # against SPIRE's documented k8s attestor mechanism (spiffe/spire
+      # doc/plugin_agent_workloadattestor_k8s.md: "retrieves the
+      # workload's pod ID from its cgroup membership").
+      hostPID: true
       hostNetwork: false
       initContainers:
         # Waits for spire-server to publish the trust bundle ConfigMap
@@ -139,6 +148,24 @@ spec:
         - name: spire-agent
           image: ghcr.io/spiffe/spire-agent:1.11.0
           args: ["-config", "/run/spire/config/agent.conf"]
+          # Without this, the k8s WorkloadAttestor plugin can't
+          # determine the node name and falls back to contacting the
+          # kubelet at 127.0.0.1:10250 — which only reaches the kubelet
+          # with hostNetwork: true. This DaemonSet intentionally runs
+          # with hostNetwork: false (least privilege), so this env var
+          # lets the plugin address the kubelet by its real node IP
+          # instead; confirmed by the exact live failure this fixes:
+          # "workload attestor \"k8s\" failed ... Get
+          # https://127.0.0.1:10250/pods: connection refused". Must be
+          # named MY_NODE_NAME specifically — that's the plugin's
+          # documented node_name_env default (doc/plugin_agent_workloadattestor_k8s.md);
+          # a first attempt using the more obvious-looking "NODE_NAME"
+          # was silently ignored (no error, just the same 127.0.0.1
+          # fallback), found live by reading the plugin's actual option
+          # table rather than assuming the name.
+          env:
+            - name: MY_NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
           securityContext:
             # The agent itself needs to run as root to create the
             # Workload API socket with permissions every app pod's

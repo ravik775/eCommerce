@@ -65,6 +65,82 @@
             <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
         </dependency>
 
+        <!-- Phase 7 (SOC2 observability): shared actuator + Prometheus
+             registry so every service exposes /actuator/prometheus
+             without each one wiring it individually — mirrors the
+             existing common-lib pattern (correlation IDs, security,
+             SPIFFE mTLS: shared cross-cutting concerns live here).
+             api-gateway already declared its own actuator dependency and
+             a broken (malformed, effectively disabled) commented-out
+             prometheus registry block — removed from api-gateway/pom.xml
+             now that this covers it, avoiding two sources of the same
+             dependency. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ADR-0002 (doc/adr/ADR-0002-zero-trust-spire-app-level.md):
+             app-level mTLS via the official SPIFFE Java Workload API
+             client — no service mesh. Consumed by both servlet-based
+             backend services (inbound Tomcat mTLS) and the reactive
+             gateway (outbound Netty mTLS); optional/no-op unless
+             spiffe.mtls.enabled=true, so services running outside K8s
+             (Docker Compose, no SPIRE agent) are unaffected. -->
+        <dependency>
+            <groupId>io.spiffe</groupId>
+            <artifactId>java-spiffe-provider</artifactId>
+            <version>0.8.17</version>
+        </dependency>
+        <!-- provided: only needed to compile against Tomcat connector
+             classes for inbound mTLS wiring; every servlet-based service
+             already brings the real dependency transitively via
+             spring-boot-starter-web. Not a new runtime dependency for
+             those services, and never loads at all for the reactive
+             gateway (no Tomcat on its classpath). -->
+        <dependency>
+            <groupId>org.apache.tomcat.embed</groupId>
+            <artifactId>tomcat-embed-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- provided: only needed to compile the outbound RestTemplate
+             mTLS wiring; a service must add the real dependency itself
+             to actually use it (no current service makes direct
+             service-to-service HTTP calls — see
+             SpiffeOutboundMtlsAutoConfiguration's Javadoc). -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.4.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- provided: only needed to compile the gateway's reactive
+             outbound mTLS wiring (Spring Cloud Gateway's
+             HttpClientCustomizer extension point + Netty's own
+             SslContext, distinct from javax.net.ssl.SSLContext) —
+             api-gateway already brings both transitively via
+             spring-cloud-starter-gateway. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-gateway-server</artifactId>
+            <version>4.2.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
