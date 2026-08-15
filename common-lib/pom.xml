@@ -70,6 +70,69 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- ADR-0002: SPIFFE/SPIRE zero-trust mTLS (inbound Tomcat,
+             outbound RestTemplate). SpiffeMtlsAutoConfiguration builds
+             its X509Source bean unconditionally once
+             spiffe.mtls.enabled=true (every servlet-based service in
+             K8s), and Spring's own ConditionalOnMissingBean type
+             deduction needs io.spiffe.workloadapi.X509Source resolvable
+             at class-load time regardless of which specific inbound/
+             outbound auto-config ends up active — an `optional` (or
+             `provided`) dependency here does NOT propagate to modules
+             that depend on common-lib, so every consumer crashed at
+             startup with ClassNotFoundException: X509Source, found live
+             on first deploy. NOT optional, for that reason. -->
+        <dependency>
+            <groupId>io.spiffe</groupId>
+            <artifactId>java-spiffe-core</artifactId>
+            <version>0.8.17</version>
+        </dependency>
+        <dependency>
+            <groupId>io.spiffe</groupId>
+            <artifactId>java-spiffe-provider</artifactId>
+            <version>0.8.17</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.4.2</version>
+        </dependency>
+        <!-- provided, not compile scope: common-lib needs Connector/
+             SSLHostConfig on ITS OWN compile classpath to build
+             SpiffeInboundMtlsAutoConfiguration at all (a module's javac
+             run only sees its own declared dependencies, not what a
+             downstream consumer happens to bring in — found live: a
+             stale target/classes directory masked this locally, but a
+             clean Docker build failed with "package
+             org.apache.catalina.connector does not exist"). Not
+             `compile` scope, since that would force a Tomcat servlet
+             container onto every common-lib consumer including the
+             reactive-only api-gateway; every actual servlet-based
+             service already brings tomcat-embed-core transitively via
+             its own spring-boot-starter-web, which is what
+             ConditionalOnClass(Connector.class) checks against there. -->
+        <dependency>
+            <groupId>org.apache.tomcat.embed</groupId>
+            <artifactId>tomcat-embed-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Gateway's Netty-based outbound mTLS: kept optional since
+             only api-gateway (already WebFlux/reactor-netty, with
+             spring-cloud-starter-gateway on its classpath regardless) is
+             conditional on this; forcing it onto every servlet-based
+             service would be the wrong direction. -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-gateway</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>
