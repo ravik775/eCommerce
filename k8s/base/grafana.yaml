@@ -18,9 +18,34 @@ data:
         url: http://prometheus:9090
         isDefault: true
       - name: Loki
+        uid: loki
         type: loki
         access: proxy
         url: http://loki:3100
+        jsonData:
+          # ADR-0032: every log line already carries [...,traceId=X] via
+          # LOGGING_PATTERN_LEVEL (k8s/base/configmap-common.yaml) — this
+          # turns that substring into a clickable jump straight to the
+          # matching Tempo trace, log -> trace direction.
+          derivedFields:
+            - datasourceUid: tempo
+              matcherRegex: "traceId=([a-f0-9-]+)"
+              name: TraceID
+              url: "$${__value.raw}"
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        jsonData:
+          # Trace -> log direction: jump from a span straight to that
+          # request's log lines in Loki, filtered by the same traceId.
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: "-5m"
+            spanEndTimeShift: "5m"
+            filterByTraceID: true
+            customQuery: false
 ---
 apiVersion: v1
 kind: ConfigMap

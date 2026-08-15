@@ -61,6 +61,7 @@ spec:
         - podSelector: { matchLabels: { app: ui } }            # Phase 8: static UI catch-all route
         - podSelector: { matchLabels: { app: inventory-service } } # Phase 8: admin/provider restock
         - podSelector: { matchLabels: { app: redis } }
+        - podSelector: { matchLabels: { app: tempo } } # ADR-0032: OTLP trace export
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Keycloak (host container)
 ---
 # Data-owning app services: ingress only from api-gateway (never called
@@ -86,6 +87,7 @@ spec:
       ports: [{ protocol: TCP, port: 9082 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -104,6 +106,7 @@ spec:
     # Phase 8: InventoryServiceClient seeds initial stock right after
     # creating a provider/admin product.
     - to: [{ podSelector: { matchLabels: { app: inventory-service } } }]
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -121,6 +124,7 @@ spec:
     - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -135,6 +139,7 @@ spec:
       ports: [{ protocol: TCP, port: 9085 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -151,6 +156,7 @@ spec:
     - to:
         - podSelector: { matchLabels: { app: rabbitmq } }
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -166,6 +172,7 @@ spec:
       ports: [{ protocol: TCP, port: 9081 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032: OTLP trace export
 ---
 # Infra still in-cluster: ingress only from the app pods that legitimately
 # call them. (Postgres/Kafka/Keycloak policies removed — they're no
@@ -244,6 +251,7 @@ spec:
   egress:
     - to: [{ podSelector: { matchLabels: { app: prometheus } } }]
     - to: [{ podSelector: { matchLabels: { app: loki } } }]
+    - to: [{ podSelector: { matchLabels: { app: tempo } } }] # ADR-0032
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -276,3 +284,24 @@ spec:
     # not a podSelector-expressible target.
     - to: [{ ipBlock: { cidr: 0.0.0.0/0 } }]
       ports: [{ protocol: TCP, port: 443 }, { protocol: TCP, port: 6443 }]
+---
+# ADR-0032: Tempo (trace backend) — ingress from every service that
+# exports spans via OTLP, plus Grafana (trace query API, port 3200).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tempo-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: tempo } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: grafana } }
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: catalog-service } }
+        - podSelector: { matchLabels: { app: inventory-service } }
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: payment-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+        - podSelector: { matchLabels: { app: user-service } }

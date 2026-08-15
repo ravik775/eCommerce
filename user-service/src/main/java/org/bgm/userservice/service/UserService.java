@@ -55,21 +55,42 @@ public class UserService {
      * resolves it by keycloak_subject_id, creating it on first call
      * rather than requiring a separate registration step no route in
      * this UI ever prompts for.
+     * <p>
+     * Falls back to a lookup by email before creating a new row: this
+     * Keycloak deployment's tokens don't carry a "sub" claim (see
+     * doc/architecture/14-roles-and-permissions.md), so the identity key
+     * passed here changed from the JWT subject to preferred_username
+     * partway through this project — rows created under the old scheme
+     * have keycloak_subject_id values that will never match a real
+     * caller's preferred_username again. Without this fallback, every
+     * one of those legacy rows becomes a landmine: the email-uniqueness
+     * constraint rejects the "new" row this method would otherwise try
+     * to create for the same real person, turning every subsequent
+     * login into a 500 (found live, exactly this way). Migrating the
+     * legacy row's key forward on first sight is simpler than a manual
+     * data backfill and self-heals every account on its next login.
      */
     @Transactional
     public User getOrCreateByKeycloakSubject(String keycloakSubjectId, String email, String name, Set<Role> roles) {
-        return userRepository.findByKeycloakSubjectId(keycloakSubjectId).orElseGet(() -> {
-            User user = new User();
-            user.setKeycloakSubjectId(keycloakSubjectId);
-            user.setName(name);
-            user.setEmail(email);
-            user.setStatus(UserStatus.ACTIVE);
-            user.setRoles(roles == null || roles.isEmpty() ? Set.of(Role.CUSTOMER) : roles);
-            Instant now = Instant.now();
-            user.setCreatedAt(now);
-            user.setUpdatedAt(now);
-            return userRepository.save(user);
-        });
+        return userRepository.findByKeycloakSubjectId(keycloakSubjectId)
+                .or(() -> userRepository.findByEmail(email).map(existing -> {
+                    existing.setKeycloakSubjectId(keycloakSubjectId);
+                    existing.setName(name);
+                    existing.setUpdatedAt(Instant.now());
+                    return userRepository.save(existing);
+                }))
+                .orElseGet(() -> {
+                    User user = new User();
+                    user.setKeycloakSubjectId(keycloakSubjectId);
+                    user.setName(name);
+                    user.setEmail(email);
+                    user.setStatus(UserStatus.ACTIVE);
+                    user.setRoles(roles == null || roles.isEmpty() ? Set.of(Role.CUSTOMER) : roles);
+                    Instant now = Instant.now();
+                    user.setCreatedAt(now);
+                    user.setUpdatedAt(now);
+                    return userRepository.save(user);
+                });
     }
 
     @Transactional

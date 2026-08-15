@@ -50,3 +50,16 @@ data:
   # endpoints are NOT in this include list on purpose).
   MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,prometheus"
   MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: "true"
+  # ADR-0032: OpenTelemetry distributed tracing, exported to the
+  # in-cluster Tempo Deployment (k8s/base/tempo.yaml) via OTLP/HTTP.
+  # management.tracing.enabled gates TracingAutoConfiguration itself
+  # (common-lib) — every service pays zero tracing overhead until this
+  # is explicitly turned on, same "opt-in, not silently pervasive"
+  # posture as everything else added to common-config here.
+  MANAGEMENT_TRACING_ENABLED: "true"
+  MANAGEMENT_OTLP_TRACING_ENDPOINT: "http://tempo:4318/v1/traces"
+  # Success spans sampled at 10%; every span that ends in an error is
+  # always exported regardless of this rate — see
+  # ErrorAlwaysSampledSpanExporter's Javadoc for why that split can't be
+  # expressed as a single sampling.probability value.
+  TRACING_SUCCESS_SAMPLE_RATE: "0.1"
