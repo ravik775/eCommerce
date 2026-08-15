@@ -2,6 +2,7 @@ package org.bgm.apigateway.config;
 
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.JWTParser;
+import org.bgm.common.audit.AuditLogger;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcReactiveOAuth2UserService;
@@ -46,6 +47,15 @@ public class KeycloakOidcUserService extends OidcReactiveOAuth2UserService {
             } catch (ParseException e) {
                 throw new IllegalStateException("Unable to parse access token for realm_access roles", e);
             }
+            // Phase 7 audit trail: the login leg. Joined to the order/
+            // payment legs downstream by principal name (this realm's
+            // username), the same identifier order-service's customerId
+            // is derived from — see AuditLogger's Javadoc for why this,
+            // not the HTTP correlation ID, is the actual join key here.
+            AuditLogger.log("LOGIN", AuditLogger.fields()
+                    .with("principal", oidcUser.getName())
+                    .with("authorities", authorities)
+                    .build());
             return new DefaultOidcUser(authorities, oidcUser.getIdToken(), oidcUser.getUserInfo());
         });
     }

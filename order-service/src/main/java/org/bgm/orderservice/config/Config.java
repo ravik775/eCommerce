@@ -19,7 +19,13 @@ public class Config {
                     auth.isAuthenticated() &&
                     !(auth instanceof AnonymousAuthenticationToken)){
                 var name = auth.getName();
-                if(name!=null || !name.isBlank())
+                // Was `||`, not `&&` — with a null name the left side is
+                // false but OR still evaluates the right side,
+                // NullPointerException on null.isBlank() instead of
+                // falling through to the SYSTEM default below. Found
+                // live: order creation 500'd on every authenticated
+                // request whose JWT principal name came back null.
+                if(name!=null && !name.isBlank())
                     return Optional.of(name);
             }
             return Optional.of("SYSTEM");

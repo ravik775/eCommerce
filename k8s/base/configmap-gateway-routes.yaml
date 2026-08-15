@@ -18,11 +18,57 @@ data:
         gateway:
           routes:
             - id: order-service
-              uri: http://order-service:8082
+              # https, not http: order-service enforces inbound mTLS
+              # (ADR-0002) — an http:// route hits its TLS-only connector
+              # with plaintext and gets rejected. Same class of bug as
+              # OrderServiceClient's original ORDER-SERVICE fix; found
+              # live testing the gateway's order-service route directly
+              # (catalog-service's routes already correctly use https://).
+              uri: https://order-service:8082
+              # Path=/order/** only, not the compound "/order/**,/order"
+              # — found live: the combined predicate non-deterministically
+              # 405'd POST (but not GET) to the bare "/order" literal, a
+              # Spring Cloud Gateway route-matching quirk with combined
+              # exact+wildcard Path patterns for non-GET methods. Two
+              # separate route entries (this one for sub-paths, the
+              # order-service-create one below for the bare create call)
+              # avoids the ambiguity entirely.
               predicates:
-                - Path=/order/**,/order
+                - Path=/order/**
               filters:
-                - StripPrefix=1
+                # RewritePath, not StripPrefix=1: OrderController is
+                # mapped at /orders (plural) on order-service, not root
+                # — StripPrefix=1 would forward "/order" -> "" (root) and
+                # "/order/5" -> "/5", neither of which OrderController
+                # answers. Rewrites the gateway's public /order path onto
+                # order-service's actual /orders mapping. Found live: the
+                # first genuine gateway->order-service call (with
+                # StripPrefix=1) tripped the CircuitBreaker fallback
+                # instead of reaching OrderController at all — unlike
+                # catalog's route, which happens to work because
+                # CatalogController's /products base already matches what
+                # StripPrefix=1 leaves behind for /catalog/**.
+                - RewritePath=/order(?<remaining>.*), /orders${remaining}
+                - TokenRelay=
+                - name: CircuitBreaker
+                  args:
+                    name: orderCircuit
+                    fallbackUri: forward:/fallback/order
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+            - id: order-service-create
+              # Companion to the order-service route above: the bare
+              # "/order" literal (POST — order creation), split into its
+              # own route rather than combined into that route's Path
+              # predicate. See that route's comment for why.
+              uri: https://order-service:8082
+              predicates:
+                - Path=/order
+              filters:
+                - RewritePath=/order, /orders
                 - TokenRelay=
                 - name: CircuitBreaker
                   args:

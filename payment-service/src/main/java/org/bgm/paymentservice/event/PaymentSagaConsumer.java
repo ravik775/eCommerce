@@ -3,6 +3,7 @@ package org.bgm.paymentservice.event;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bgm.common.audit.AuditLogger;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.paymentservice.client.OrderServiceClient;
 import org.bgm.paymentservice.dto.InitiatePaymentRequest;
@@ -52,14 +53,28 @@ public class PaymentSagaConsumer {
         Payment payment = paymentService.initiate(request);
 
         String eventId = UUID.randomUUID().toString();
+        // Phase 7 audit trail: the payment leg, closing out the login →
+        // order → payment sequence — joined to the order leg by orderId
+        // (see AuditLogger's Javadoc for why orderId/customerId, not the
+        // HTTP correlation ID, are the actual join keys across this
+        // Kafka-based saga).
         if (payment.getStatus() == PaymentStatus.SUCCESS) {
             PaymentSuccessEvent success = new PaymentSuccessEvent(
                     eventId, event.orderId(), payment.getTransactionId(), payment.getAmount(), Instant.now().toString());
             eventPublisher.publish(EventType.PAYMENT_SUCCESS, event.orderId(), eventId, success);
+            AuditLogger.log("PAYMENT_SUCCESS", AuditLogger.fields()
+                    .with("orderId", event.orderId())
+                    .with("transactionId", payment.getTransactionId())
+                    .with("amount", payment.getAmount())
+                    .build());
         } else {
             PaymentFailedEvent failed = new PaymentFailedEvent(
                     eventId, event.orderId(), "Payment processor declined", Instant.now().toString());
             eventPublisher.publish(EventType.PAYMENT_FAILED, event.orderId(), eventId, failed);
+            AuditLogger.log("PAYMENT_FAILED", AuditLogger.fields()
+                    .with("orderId", event.orderId())
+                    .with("reason", "Payment processor declined")
+                    .build());
         }
 
         markProcessed(event.eventId());

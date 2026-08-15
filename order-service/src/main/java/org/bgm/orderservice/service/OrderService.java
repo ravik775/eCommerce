@@ -1,6 +1,7 @@
 package org.bgm.orderservice.service;
 
 import lombok.RequiredArgsConstructor;
+import org.bgm.common.audit.AuditLogger;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.orderservice.dto.CreateOrderRequest;
 import org.bgm.orderservice.event.OrderCancelledEvent;
@@ -69,6 +70,15 @@ public class OrderService {
                 Instant.now().toString()
         );
         eventPublisher.publish(EventType.ORDER_CREATED, order.getId(), event.eventId(), event);
+
+        // Phase 7 audit trail: the order leg, joined to the login leg by
+        // customerId (this realm's username — see AuditLogger's Javadoc)
+        // and to the payment leg by orderId.
+        AuditLogger.log("ORDER_CREATED", AuditLogger.fields()
+                .with("orderId", order.getId())
+                .with("customerId", order.getCustomerId())
+                .with("totalAmount", order.getTotalAmount())
+                .build());
 
         return order;
     }
