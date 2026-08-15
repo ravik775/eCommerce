@@ -12,6 +12,19 @@
 - `docker-compose.yml`, `scripts/dev-up.sh`, `config-server/src/main/resources/config-repo/*.yml`: the same previously-hardcoded Postgres password (duplicated across 9 files) replaced with env-var placeholders and non-production `changeme-*` defaults.
 - `.env.example` (checked in) documents the Compose-side variables; `.env` (gitignored) holds the real local values.
 
+## Known residual gap: `keycloak/ecom-realm.json`
+
+A second plaintext secret was found during a broader scan (not just the Postgres password): the gateway's Keycloak OAuth2 client secret (`gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT`), duplicated in `config-server/config-repo/api-gateway.yml` (fixed — templated the same way as Postgres) and `keycloak/ecom-realm.json` (**not fixed** — deliberately).
+
+`ecom-realm.json` is Keycloak's own realm-import bootstrap file: plain JSON, read directly by the Keycloak container on first startup, with no environment-variable templating support built in. The already-running Keycloak instance (shared by both the Compose and K8s paths — see Phase 6a's local-dev deviation note) imported this exact value the first time it started; changing the file now without also re-importing would just create a silent mismatch between what's committed and what's actually configured, breaking OAuth2 login for both environments rather than fixing anything.
+
+Given that risk, this pass left `ecom-realm.json`'s value as-is and instead:
+- Templated `config-server/config-repo/api-gateway.yml`'s copy (the one path that *is* safely changeable — K8s never reads it, going straight to `k8s/base/secrets.yaml`'s already-sealed copy instead).
+- Set `docker-compose.yml`'s `config-server` default to the *real* current value (not a fake placeholder, unlike every other credential here) so Compose keeps working without requiring a `.env` override.
+- Documented the value in `.env.example` with an explicit warning not to change it without also updating and re-importing `ecom-realm.json`.
+
+**The actual industry-standard fix**, not done here: an `envsubst`-based (or Keycloak's own `KC_SPI_*` env-var override mechanism) preprocessing step in the Keycloak container's entrypoint, templating `ecom-realm.json` before import the same way `config-server` already templates its own YAML — turning this from "can't be templated" into "isn't templated yet." Left as a flagged follow-up rather than risking breaking live authentication to half-solve it in this pass.
+
 ## Scope: strict
 
 Sealed Secrets' encryption is bound to a **scope** — how loosely a sealed value can be moved and still decrypt:

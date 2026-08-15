@@ -1,0 +1,28 @@
+# gitleaks config for CI secret scanning (see .github/workflows/ci.yml's
+# secret-scan job). Uses gitleaks' own default detection rules
+# (https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml)
+# unchanged — only adding path exclusions here, not reinventing pattern
+# matching.
+title = "eCommerce gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+Test fixtures use intentionally fake/dummy values, not real secrets.
+k8s/base/secrets.yaml holds Bitnami Sealed Secrets ciphertext (see
+doc/architecture/12-secrets-management.md) — high-entropy by nature and
+safe to commit by design (only the cluster's sealed-secrets-controller
+private key, never committed, can decrypt it), not a real plaintext
+secret despite matching a high-entropy detection rule.
+"""
+paths = [
+  '''.*/src/test/.*''',
+  '''k8s/base/secrets\.yaml''',
+  # Architecture docs narrate live-test commands/output referencing
+  # already-known, already-documented dev-only credentials (e.g. the
+  # Grafana admin/admin default) — illustrative prose, not source code
+  # holding a live secret, same reasoning as excluding test fixtures.
+  '''doc/.*\.md''',
+]

@@ -21,6 +21,32 @@ permissions:
   security-events: write # required for CodeQL SARIF upload
 
 jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reuses gitleaks' own default detection rules (see .gitleaks.toml)
+      # rather than hand-rolling regex patterns — the OSS CLI directly,
+      # not the GitHub-marketplace Action, since that requires a paid
+      # license for private repos; the CLI itself is free regardless.
+      # --no-git: scans the checked-out working tree's current content,
+      # not git history — a secret that was committed and later removed
+      # (like the plaintext Postgres password this repo actually had,
+      # see doc/architecture/12-secrets-management.md) stays out of
+      # scope for this gate. Full-history scanning found it correctly
+      # but would then fail every future CI run forever on an
+      # already-fixed historical commit, since purging git history is a
+      # separate, far riskier decision than this gate's job. Test
+      # fixtures (dummy data) and Sealed Secrets ciphertext (safe by
+      # design, high-entropy by nature) are excluded via
+      # .gitleaks.toml's allowlist, not by skipping paths here.
+      - name: gitleaks detect
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo --config /repo/.gitleaks.toml --no-git --redact -v
+
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest

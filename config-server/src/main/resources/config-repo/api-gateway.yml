@@ -103,7 +103,13 @@ spring:
         registration:
           keycloak:
             client-id: ecommerce-gateway
-            client-secret: gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT
+            # Only reachable via docker-compose's Compose-path gateway
+            # (K8s reads this same secret directly from
+            # k8s/base/secrets.yaml as a SealedSecret, bypassing
+            # config-server entirely — SPRING_CONFIG_IMPORT is unset
+            # there per ADR-0008), so changing this default is safe
+            # without touching the live K8s Keycloak realm import.
+            client-secret: ${KEYCLOAK_GATEWAY_CLIENT_SECRET:changeme-gateway-oauth2-dev}
             authorization-grant-type: authorization_code
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
             # profile,email dropped: nothing in this codebase consumes

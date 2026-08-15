@@ -124,6 +124,7 @@ services:
     # downstream service's own container.
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-postgres-dev}
+      KEYCLOAK_GATEWAY_CLIENT_SECRET: ${KEYCLOAK_GATEWAY_CLIENT_SECRET:-gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}
     # HTTP-200-only check, not a body/"UP" match: config-server's own
     # /actuator/health is shadowed by its generic Environment Controller
     # route (Spring Cloud Config Server maps /{application}/{profile}
