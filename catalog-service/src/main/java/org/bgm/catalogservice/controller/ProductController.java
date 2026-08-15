@@ -34,9 +34,9 @@ public class ProductController {
     // authenticated user (CUSTOMER included) since browsing the catalog
     // isn't a privileged action.
     //
-    // Not listing SUPER_ADMIN here: it's a Keycloak composite role
-    // (CATALOG_ADMIN + INVENTORY_ADMIN + ADMIN, see the realm config) —
-    // its JWT already carries CATALOG_ADMIN via composite expansion, so
+    // Not listing PLATFORM_ADMIN here: it's a Keycloak composite role
+    // (CATALOG_ADMIN + INVENTORY_ADMIN + IAM_ADMIN, see the realm config)
+    // — its JWT already carries CATALOG_ADMIN via composite expansion, so
     // every check below only ever needs to name the one role it actually
     // means. Composition happens once, at the IAM layer.
     @PreAuthorize("hasAnyRole('CATALOG_ADMIN','PROVIDER')")

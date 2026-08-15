@@ -20,7 +20,7 @@ import java.util.Map;
  * which needs one because its caller is a Kafka event, not an HTTP
  * request with a real user's token already attached): the same
  * provider/admin whose request reached catalog-service is the one
- * whose role (hasAnyRole('ADMIN','PROVIDER')) inventory-service's own
+ * whose role (hasAnyRole('INVENTORY_ADMIN','PROVIDER')) inventory-service's own
  * /inventory/add already requires, so relaying the token that got them
  * this far is simpler than provisioning a second service identity.
  */

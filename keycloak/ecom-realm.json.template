@@ -10,12 +10,12 @@
       { "name": "CUSTOMER", "description": "Can browse catalog and place/cancel/return orders" },
       { "name": "CATALOG_ADMIN", "description": "Can manage the catalog (any product, not ownership-scoped) — ADR-0033. No inventory or user/role-management privilege" },
       { "name": "INVENTORY_ADMIN", "description": "Can restock inventory (any product) — ADR-0033. No catalog or user/role-management privilege" },
-      { "name": "ADMIN", "description": "ADR-0033: can ONLY assign/revoke roles for other users — no operational privilege of its own (not catalog/inventory access)" },
+      { "name": "IAM_ADMIN", "description": "ADR-0033 (renamed from ADMIN for clarity): can ONLY assign/revoke roles for other users — no operational privilege of its own (not catalog/inventory access)" },
       {
-        "name": "SUPER_ADMIN",
-        "description": "Union of CATALOG_ADMIN + INVENTORY_ADMIN + ADMIN (ADR-0033) — every capability combined. A real Keycloak composite role, not a manually-duplicated check: a SUPER_ADMIN JWT's realm_access.roles genuinely contains all three underlying roles, so every @PreAuthorize/gateway check only ever needs to name the single specific role it actually means (e.g. hasRole('CATALOG_ADMIN')) — composition happens once, here, at the IAM layer, not re-derived at every enforcement point.",
+        "name": "PLATFORM_ADMIN",
+        "description": "Union of CATALOG_ADMIN + INVENTORY_ADMIN + IAM_ADMIN (ADR-0033, renamed from SUPER_ADMIN for clarity) — every capability combined. A real Keycloak composite role, not a manually-duplicated check: a PLATFORM_ADMIN JWT's realm_access.roles genuinely contains all three underlying roles, so every @PreAuthorize/gateway check only ever needs to name the single specific role it actually means (e.g. hasRole('CATALOG_ADMIN')) — composition happens once, here, at the IAM layer, not re-derived at every enforcement point.",
         "composite": true,
-        "composites": { "realm": ["CATALOG_ADMIN", "INVENTORY_ADMIN", "ADMIN"] }
+        "composites": { "realm": ["CATALOG_ADMIN", "INVENTORY_ADMIN", "IAM_ADMIN"] }
       },
       { "name": "PROVIDER", "description": "Can create/edit/deactivate their own catalog products and add stock for them (Phase 8) — no admin/customer capability implied, not a superset of either" },
       { "name": "CAN_TRACE", "description": "Can enable the Settings > force verbose tracing toggle (ADR-0032)" }
@@ -131,18 +131,18 @@
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "admin1-pass", "temporary": false }],
       "requiredActions": [],
-      "realmRoles": ["CUSTOMER", "PROVIDER", "CATALOG_ADMIN", "INVENTORY_ADMIN", "ADMIN", "SUPER_ADMIN", "CAN_TRACE"]
+      "realmRoles": ["CUSTOMER", "PROVIDER", "CATALOG_ADMIN", "INVENTORY_ADMIN", "IAM_ADMIN", "PLATFORM_ADMIN", "CAN_TRACE"]
     },
     {
-      "username": "superadmin1",
+      "username": "platformadmin1",
       "enabled": true,
       "firstName": "Test",
-      "lastName": "SuperAdmin",
-      "email": "superadmin1@example.test",
+      "lastName": "PlatformAdmin",
+      "email": "platformadmin1@example.test",
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "superadmin1-pass", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "platformadmin1-pass", "temporary": false }],
       "requiredActions": [],
-      "realmRoles": ["SUPER_ADMIN", "ADMIN", "CUSTOMER"]
+      "realmRoles": ["PLATFORM_ADMIN", "CUSTOMER"]
     },
     {
       "username": "provider1",

@@ -35,9 +35,9 @@ public class InventoryController {
     // after that same caller created the product, so ownership was
     // already enforced one hop upstream) should be able to add stock.
     // ADR-0033: INVENTORY_ADMIN, not the old catch-all ADMIN (which no
-    // longer carries operational privilege) — SUPER_ADMIN's JWT already
-    // carries INVENTORY_ADMIN via Keycloak composite-role expansion, so
-    // this doesn't need to list SUPER_ADMIN separately.
+    // longer carries operational privilege) — PLATFORM_ADMIN's JWT
+    // already carries INVENTORY_ADMIN via Keycloak composite-role
+    // expansion, so this doesn't need to list PLATFORM_ADMIN separately.
     @PreAuthorize("hasAnyRole('INVENTORY_ADMIN','PROVIDER')")
     @PostMapping("/add")
     public ResponseEntity<Void> add(@Valid @RequestBody BulkInventoryRequest request) {

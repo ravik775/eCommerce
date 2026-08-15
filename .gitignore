@@ -63,3 +63,4 @@ build/
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
 /.idea/
+credentials.local.md
