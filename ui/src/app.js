@@ -50,19 +50,28 @@ async function loadMe() {
   me = await res.json();
   document.getElementById('whoami').textContent = `${me.name || me.email} (${me.roles.join(', ')})`;
 
-  // Role-gated panels — hidden by default in index.html, unhidden here.
+  // Role-gated tabs — hidden by default in index.html, unhidden here.
   // Client-side only, for UI convenience: the real enforcement is the
   // gateway's RequireRole filter plus catalog-service/inventory-service's
   // own @PreAuthorize + ownership checks, same split of responsibility
   // as everywhere else in this app.
   if (me.roles.includes('PROVIDER')) {
-    document.getElementById('provider-panel').hidden = false;
+    document.getElementById('tab-btn-provider').hidden = false;
     loadMyProducts();
   }
   if (me.roles.includes('ADMIN')) {
-    document.getElementById('admin-panel').hidden = false;
+    document.getElementById('tab-btn-admin').hidden = false;
   }
   await loadMyOrders();
+}
+
+function switchTab(name) {
+  for (const btn of document.querySelectorAll('.tab-btn')) {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  }
+  for (const panel of document.querySelectorAll('.tab-panel')) {
+    panel.classList.toggle('active', panel.id === `tab-${name}`);
+  }
 }
 
 // ADR-0031: status-only order history, refreshed on login and after
@@ -265,6 +274,9 @@ document.getElementById('search').addEventListener('input', (e) => loadProducts(
 document.getElementById('checkout').addEventListener('click', checkout);
 document.getElementById('provider-form').addEventListener('submit', createProviderProduct);
 document.getElementById('restock-form').addEventListener('submit', restock);
+for (const btn of document.querySelectorAll('.tab-btn')) {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+}
 
 loadMe().then(() => loadProducts()).catch((err) => {
   document.getElementById('whoami').textContent = `Error: ${err.message}`;

@@ -12,34 +12,51 @@
     <div id="whoami">Loading…</div>
   </header>
 
+  <!-- Role-based tabs (not flat): "Shop" is every authenticated user's
+       home tab; "My Products"/"Admin" only exist as nav entries at all
+       for a session that actually has PROVIDER/ADMIN — hidden, not just
+       disabled, same as the sections they replace used to be. Client-side
+       only, for navigation convenience: the real enforcement is still the
+       gateway's RequireRole filter plus each service's own @PreAuthorize
+       + ownership checks. -->
+  <nav id="tabs">
+    <button class="tab-btn active" data-tab="shop">Shop</button>
+    <button class="tab-btn" data-tab="provider" id="tab-btn-provider" hidden>My Products</button>
+    <button class="tab-btn" data-tab="admin" id="tab-btn-admin" hidden>Admin</button>
+  </nav>
+
   <main>
-    <section id="catalog">
-      <h2>Catalog</h2>
-      <input id="search" type="text" placeholder="Search products…" />
-      <ul id="products"></ul>
-      <div id="products-pager"></div>
+    <section id="tab-shop" class="tab-panel active">
+      <div class="shop-grid">
+        <div id="catalog">
+          <h2>Catalog</h2>
+          <input id="search" type="text" placeholder="Search products…" />
+          <ul id="products"></ul>
+          <div id="products-pager"></div>
+        </div>
+
+        <div class="shop-side">
+          <div id="cart">
+            <h2>Cart</h2>
+            <ul id="cart-items"></ul>
+            <p>Total: $<span id="cart-total">0.00</span></p>
+            <button id="checkout" disabled>Checkout</button>
+            <p id="checkout-status"></p>
+          </div>
+
+          <!-- ADR-0031: minimal order history — status only, no
+               cancel/return actions and no per-order line-item
+               drill-down (deliberate scope line, see the ADR). -->
+          <div id="orders">
+            <h2>My Orders</h2>
+            <ul id="order-list"></ul>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section id="cart">
-      <h2>Cart</h2>
-      <ul id="cart-items"></ul>
-      <p>Total: $<span id="cart-total">0.00</span></p>
-      <button id="checkout" disabled>Checkout</button>
-      <p id="checkout-status"></p>
-    </section>
-
-    <!-- ADR-0031: minimal order history — status only, no cancel/return
-         actions and no per-order line-item drill-down (deliberate scope
-         line, see the ADR). -->
-    <section id="orders">
-      <h2>My Orders</h2>
-      <ul id="order-list"></ul>
-    </section>
-
-    <!-- Hidden by default (app.js unhides based on the roles /user/me
-         returns) — PROVIDER only, not shown to CUSTOMER/ADMIN-only users. -->
-    <section id="provider-panel" hidden>
-      <h2>My Products (Provider)</h2>
+    <section id="tab-provider" class="tab-panel">
+      <h2>My Products</h2>
       <form id="provider-form">
         <input id="p-name" type="text" placeholder="Name" required />
         <input id="p-description" type="text" placeholder="Description" />
@@ -51,9 +68,8 @@
       <ul id="provider-products"></ul>
     </section>
 
-    <!-- ADMIN only — restock any product by ID. -->
-    <section id="admin-panel" hidden>
-      <h2>Restock (Admin)</h2>
+    <section id="tab-admin" class="tab-panel">
+      <h2>Restock</h2>
       <form id="restock-form">
         <input id="r-product-id" type="number" placeholder="Product ID" required />
         <input id="r-quantity" type="number" min="1" placeholder="Quantity to add" required />
