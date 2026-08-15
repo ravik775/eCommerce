@@ -19,13 +19,25 @@ import org.springframework.web.client.RestTemplate;
 @RequiredArgsConstructor
 public class OrderServiceClient {
 
-    private final RestTemplate loadBalancedRestTemplate;
+    private final RestTemplate restTemplate;
 
     @CircuitBreaker(name = "orderServiceLookup", fallbackMethod = "fallbackGetOrderAmount")
     @Retry(name = "orderServiceLookup")
     public double getOrderAmount(long orderId) {
-        OrderLookupResponse response = loadBalancedRestTemplate.getForObject(
-                "http://ORDER-SERVICE/orders/" + orderId, OrderLookupResponse.class);
+        // https, not http: order-service enforces inbound mTLS (ADR-0002)
+        // once SPIFFE_MTLS_ENABLED=true; restTemplate gets
+        // SpiffeOutboundMtlsAutoConfiguration's client-SVID-bearing
+        // RequestFactory the same way, but only for https:// requests —
+        // an http:// URL bypasses that SSLContext entirely and would just
+        // get order-service's plaintext-rejection response.
+        //
+        // Direct K8s Service DNS, not the Eureka-style "ORDER-SERVICE"
+        // logical hostname: per ADR-0008 this deployment has no Eureka
+        // server, so a @LoadBalanced RestTemplate has no ServiceInstance
+        // to resolve "ORDER-SERVICE" to and fails with "Service Instance
+        // cannot be null, serviceId: ORDER-SERVICE" (confirmed live).
+        OrderLookupResponse response = restTemplate.getForObject(
+                "https://order-service:8082/orders/" + orderId, OrderLookupResponse.class);
         if (response == null || response.totalAmount() == null) {
             throw new OrderLookupException(orderId, null);
         }
