@@ -28,4 +28,7 @@ public class OutboxEvent {
     private boolean published;
     private Instant createdAt;
     private Instant publishedAt;
+
+    // ADR-0032: see order-service's OutboxEvent for the full rationale.
+    private String correlationId;
 }

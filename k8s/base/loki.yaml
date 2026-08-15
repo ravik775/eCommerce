@@ -155,8 +155,11 @@ data:
     loki.process "add_labels" {
       forward_to = [loki.write.default.receiver]
 
+      // ADR-0032: bracket prefix is now [correlationId=X,traceId=Y,orderId=Z]
+      // (orderId added as a THIRD field, not folded into correlationId —
+      // see CorrelationConstants.MDC_ORDER_ID_KEY's Javadoc for why).
       stage.regex {
-        expression = ".*correlationId=(?P<correlationId>[^,]*),traceId=(?P<traceId>[^\\]]*)\\].*"
+        expression = ".*correlationId=(?P<correlationId>[^,]*),traceId=(?P<traceId>[^,]*),orderId=(?P<bracketOrderId>[^\\]]*)\\].*"
       }
       stage.labels {
         values = {

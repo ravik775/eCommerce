@@ -2,10 +2,12 @@ package org.bgm.orderservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.event.schema.EventSchemaValidator;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.orderservice.model.OutboxEvent;
 import org.bgm.orderservice.repository.OutboxEventRepository;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +40,11 @@ public class OrderEventPublisher {
         event.setAggregateId(aggregateId);
         event.setPublished(false);
         event.setCreatedAt(Instant.now());
+        // ADR-0032: captured here, in the same request/transaction as the
+        // write — OutboxPoller runs later, in a scheduled thread with no
+        // access to this MDC context, so the value has to be persisted
+        // to survive that hop.
+        event.setCorrelationId(MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
         try {
             event.setPayload(objectMapper.writeValueAsString(payload));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {

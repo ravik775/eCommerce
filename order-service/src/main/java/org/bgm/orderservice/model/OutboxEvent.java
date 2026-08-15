@@ -32,4 +32,10 @@ public class OutboxEvent {
     private boolean published;
     private Instant createdAt;
     private Instant publishedAt;
+
+    // ADR-0032: the correlation ID as of the moment this row was written
+    // (captured from MDC in the same request/transaction) — see
+    // OutboxPoller for how this survives the hop to Kafka as a message
+    // header, and OrderEventPublisher for where it's captured.
+    private String correlationId;
 }

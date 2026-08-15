@@ -2,6 +2,7 @@ package org.bgm.notificationservice.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.notificationservice.dispatch.NotificationDispatchMessage;
 import org.bgm.notificationservice.model.ProcessedEvent;
@@ -9,6 +10,7 @@ import org.bgm.notificationservice.repository.ProcessedEventRepository;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,14 +39,16 @@ public class NotificationEventConsumer {
 
     @KafkaListener(topics = "payment-success", groupId = "notification-service")
     @Transactional
-    public void onPaymentSuccess(String message) throws Exception {
+    public void onPaymentSuccess(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
         // Last hop of the order saga (order-service -> inventory-service ->
         // payment-service already do this) — was missing here, so a
         // saga's log trail went cold right before the notification step,
         // the one place an operator would most want to confirm delivery
         // actually happened for a given order.
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -55,9 +59,11 @@ public class NotificationEventConsumer {
 
     @KafkaListener(topics = "payment-failed", groupId = "notification-service")
     @Transactional
-    public void onPaymentFailed(String message) throws Exception {
+    public void onPaymentFailed(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }

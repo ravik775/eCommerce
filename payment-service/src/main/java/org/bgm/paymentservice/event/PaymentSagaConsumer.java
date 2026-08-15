@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bgm.common.audit.AuditLogger;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.paymentservice.client.OrderServiceClient;
@@ -16,6 +17,7 @@ import org.bgm.paymentservice.repository.ProcessedEventRepository;
 import org.bgm.paymentservice.service.PaymentEventPublisher;
 import org.bgm.paymentservice.service.PaymentService;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,9 +42,11 @@ public class PaymentSagaConsumer {
 
     @KafkaListener(topics = "inventory-reserved", groupId = "payment-service")
     @Transactional
-    public void onInventoryReserved(String message) throws Exception {
+    public void onInventoryReserved(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         InventoryReservedEvent event = objectMapper.readValue(message, InventoryReservedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (processedEventRepository.existsById(event.eventId())) {
                 return;
             }

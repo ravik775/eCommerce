@@ -13,6 +13,14 @@ public final class CorrelationConstants {
     public static final String MDC_CORRELATION_ID_KEY = "correlationId";
     public static final String MDC_TRACE_ID_KEY = "traceId";
 
+    // ADR-0032: the order ID is a separate, additional log field, not a
+    // substitute for correlationId — the original correlation ID now
+    // survives front-to-back across the whole saga (via the outbox row +
+    // Kafka header, see OrderEventPublisher/OutboxPoller), so order ID
+    // no longer needs to stand in for it. Kept because "find every log
+    // line about order #23" is still a genuinely useful, distinct query.
+    public static final String MDC_ORDER_ID_KEY = "orderId";
+
     private CorrelationConstants() {
     }
 }

@@ -2,6 +2,9 @@ package org.bgm.inventoryservice.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.inventoryservice.model.OutboxEvent;
 import org.bgm.inventoryservice.repository.OutboxEventRepository;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -9,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
@@ -27,7 +31,14 @@ public class OutboxPoller {
         List<OutboxEvent> unpublished = outboxEventRepository.findByPublishedFalseOrderByCreatedAtAsc();
         for (OutboxEvent event : unpublished) {
             try {
-                kafkaTemplate.send(event.getEventType(), String.valueOf(event.getAggregateId()), event.getPayload()).get();
+                ProducerRecord<String, String> record = new ProducerRecord<>(
+                        event.getEventType(), String.valueOf(event.getAggregateId()), event.getPayload());
+                if (event.getCorrelationId() != null) {
+                    record.headers().add(new RecordHeader(
+                            CorrelationConstants.MDC_CORRELATION_ID_KEY,
+                            event.getCorrelationId().getBytes(StandardCharsets.UTF_8)));
+                }
+                kafkaTemplate.send(record).get();
                 event.setPublished(true);
                 event.setPublishedAt(Instant.now());
                 outboxEventRepository.save(event);

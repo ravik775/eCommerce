@@ -3,6 +3,7 @@ package org.bgm.inventoryservice.event;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.inventoryservice.dto.BulkInventoryRequest;
@@ -16,6 +17,7 @@ import org.bgm.inventoryservice.repository.ProcessedEventRepository;
 import org.bgm.inventoryservice.service.InventoryEventPublisher;
 import org.bgm.inventoryservice.service.InventoryService;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,9 +43,11 @@ public class InventorySagaConsumer {
 
     @KafkaListener(topics = "order-created", groupId = "inventory-service")
     @Transactional
-    public void onOrderCreated(String message) throws Exception {
+    public void onOrderCreated(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         OrderCreatedEvent event = objectMapper.readValue(message, OrderCreatedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (processedEventRepository.existsById(event.eventId())) {
                 return;
             }
@@ -78,9 +82,11 @@ public class InventorySagaConsumer {
 
     @KafkaListener(topics = "payment-failed", groupId = "inventory-service")
     @Transactional
-    public void onPaymentFailed(String message) throws Exception {
+    public void onPaymentFailed(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (processedEventRepository.existsById(event.eventId())) {
                 return;
             }

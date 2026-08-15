@@ -2,6 +2,9 @@ package org.bgm.orderservice.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.orderservice.model.OutboxEvent;
 import org.bgm.orderservice.repository.OutboxEventRepository;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -9,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
@@ -32,7 +36,20 @@ public class OutboxPoller {
         List<OutboxEvent> unpublished = outboxEventRepository.findByPublishedFalseOrderByCreatedAtAsc();
         for (OutboxEvent event : unpublished) {
             try {
-                kafkaTemplate.send(event.getEventType(), String.valueOf(event.getAggregateId()), event.getPayload())
+                // ADR-0032: correlationId travels as a Kafka message
+                // header, captured back when this row was written (see
+                // OrderEventPublisher) — this poller runs in its own
+                // scheduled thread with no MDC context of its own to
+                // fall back on, so the stored value is the only source
+                // of truth here.
+                ProducerRecord<String, String> record = new ProducerRecord<>(
+                        event.getEventType(), String.valueOf(event.getAggregateId()), event.getPayload());
+                if (event.getCorrelationId() != null) {
+                    record.headers().add(new RecordHeader(
+                            CorrelationConstants.MDC_CORRELATION_ID_KEY,
+                            event.getCorrelationId().getBytes(StandardCharsets.UTF_8)));
+                }
+                kafkaTemplate.send(record)
                         .get(); // synchronous ack within this poll tick — simplest correct behavior at this volume
                 event.setPublished(true);
                 event.setPublishedAt(Instant.now());

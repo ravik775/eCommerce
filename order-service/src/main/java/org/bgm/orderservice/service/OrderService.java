@@ -61,13 +61,14 @@ public class OrderService {
 
         order = orderRepository.save(order); // IDENTITY strategy: id populated immediately
 
-        // From here on, this request's log lines (and everything the
-        // rest of this saga does downstream via Kafka — see
-        // OrderCorrelationScope) are tagged with the order ID itself as
-        // the correlation ID, not the random one CorrelationTraceFilter
-        // assigned at request entry: the order ID is what's actually
-        // shared across every hop of this saga, and is now known.
-        MDC.put(CorrelationConstants.MDC_CORRELATION_ID_KEY, String.valueOf(order.getId()));
+        // ADR-0032: orderId is a SEPARATE log field from here on, not a
+        // substitute for correlationId (which stays whatever
+        // CorrelationTraceFilter assigned at request entry, and now
+        // survives the whole saga via the outbox row + Kafka header —
+        // see OrderEventPublisher/OutboxPoller). Both are independently
+        // useful: correlationId for "this one browser action end to
+        // end," orderId for "everything about order #23."
+        MDC.put(CorrelationConstants.MDC_ORDER_ID_KEY, String.valueOf(order.getId()));
 
         // ADR-0007: outbox row written in this same transaction as the
         // order row above — atomic, closes the dual-write problem.

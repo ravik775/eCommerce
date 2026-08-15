@@ -25,7 +25,9 @@ data:
   SPRING_CONFIG_IMPORT: ""
   EUREKA_CLIENT_ENABLED: "false"
   SPRING_CLOUD_DISCOVERY_ENABLED: "false"
-  LOGGING_PATTERN_LEVEL: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-}]"
+  # ADR-0032: orderId added as a separate field, not a correlationId
+  # substitute — see CorrelationConstants.MDC_ORDER_ID_KEY's Javadoc.
+  LOGGING_PATTERN_LEVEL: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-},orderId=%X{orderId:-}]"
   SPRING_KAFKA_BOOTSTRAP_SERVERS: "host.docker.internal:9092"
   SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
   SPRING_KAFKA_CONSUMER_PROPERTIES_SPRING_JSON_TRUSTED_PACKAGES: "org.bgm.*"

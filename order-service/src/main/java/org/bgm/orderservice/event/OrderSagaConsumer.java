@@ -3,11 +3,13 @@ package org.bgm.orderservice.event;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.orderservice.model.ProcessedEvent;
 import org.bgm.orderservice.repository.ProcessedEventRepository;
 import org.bgm.orderservice.service.OrderService;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,9 +32,11 @@ public class OrderSagaConsumer {
 
     @KafkaListener(topics = "payment-success", groupId = "order-service")
     @Transactional
-    public void onPaymentSuccess(String message) throws Exception {
+    public void onPaymentSuccess(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -43,9 +47,11 @@ public class OrderSagaConsumer {
 
     @KafkaListener(topics = "payment-failed", groupId = "order-service")
     @Transactional
-    public void onPaymentFailed(String message) throws Exception {
+    public void onPaymentFailed(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -57,9 +63,11 @@ public class OrderSagaConsumer {
 
     @KafkaListener(topics = "inventory-reservation-failed", groupId = "order-service")
     @Transactional
-    public void onInventoryReservationFailed(String message) throws Exception {
+    public void onInventoryReservationFailed(
+            String message,
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
         InventoryReservationFailedEvent event = objectMapper.readValue(message, InventoryReservationFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
