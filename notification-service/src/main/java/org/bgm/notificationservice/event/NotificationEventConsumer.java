@@ -2,6 +2,7 @@ package org.bgm.notificationservice.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.notificationservice.dispatch.NotificationDispatchMessage;
 import org.bgm.notificationservice.model.ProcessedEvent;
 import org.bgm.notificationservice.repository.ProcessedEventRepository;
@@ -38,22 +39,31 @@ public class NotificationEventConsumer {
     @Transactional
     public void onPaymentSuccess(String message) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
-        if (alreadyProcessed(event.eventId())) {
-            return;
+        // Last hop of the order saga (order-service -> inventory-service ->
+        // payment-service already do this) — was missing here, so a
+        // saga's log trail went cold right before the notification step,
+        // the one place an operator would most want to confirm delivery
+        // actually happened for a given order.
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+            if (alreadyProcessed(event.eventId())) {
+                return;
+            }
+            dispatch(event.orderId(), NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION);
+            markProcessed(event.eventId());
         }
-        dispatch(event.orderId(), NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION);
-        markProcessed(event.eventId());
     }
 
     @KafkaListener(topics = "payment-failed", groupId = "notification-service")
     @Transactional
     public void onPaymentFailed(String message) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        if (alreadyProcessed(event.eventId())) {
-            return;
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+            if (alreadyProcessed(event.eventId())) {
+                return;
+            }
+            dispatch(event.orderId(), NotificationDispatchMessage.TYPE_PAYMENT_FAILED);
+            markProcessed(event.eventId());
         }
-        dispatch(event.orderId(), NotificationDispatchMessage.TYPE_PAYMENT_FAILED);
-        markProcessed(event.eventId());
     }
 
     private void dispatch(long orderId, String type) {

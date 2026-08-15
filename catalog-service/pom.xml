@@ -52,6 +52,18 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!-- Phase 8 provider feature: InventoryServiceClient's one
+             outbound call (POST /inventory/add after creating a
+             provider/admin product) — same reasoning as
+             payment-service's own httpclient5 dependency (common-lib's
+             SpiffeOutboundMtlsAutoConfiguration declares it `provided`
+             on purpose, each real consumer must bring the runtime
+             dependency itself). -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.4.1</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>

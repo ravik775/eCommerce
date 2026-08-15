@@ -6,6 +6,7 @@ import org.bgm.inventoryservice.dto.BulkInventoryRequest;
 import org.bgm.inventoryservice.dto.InventoryResponse;
 import org.bgm.inventoryservice.service.InventoryService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -27,6 +28,13 @@ public class InventoryController {
         return ResponseEntity.ok().build();
     }
 
+    // Was open to any authenticated user (no @PreAuthorize at all) —
+    // real gap, closed as part of Phase 8's provider feature: only
+    // ADMIN (any product) or PROVIDER (their own — catalog-service's
+    // InventoryServiceClient only calls this right after that same
+    // caller created the product, so ownership was already enforced
+    // one hop upstream) should be able to add stock.
+    @PreAuthorize("hasAnyRole('ADMIN','PROVIDER')")
     @PostMapping("/add")
     public ResponseEntity<Void> add(@Valid @RequestBody BulkInventoryRequest request) {
         inventoryService.add(request);

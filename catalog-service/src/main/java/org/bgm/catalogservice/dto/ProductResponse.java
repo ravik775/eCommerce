@@ -1,6 +1,7 @@
 package org.bgm.catalogservice.dto;
 
 import org.bgm.catalogservice.model.Product;
+import org.bgm.catalogservice.model.ProductStatus;
 
 public record ProductResponse(
         long id,
@@ -8,7 +9,10 @@ public record ProductResponse(
         String description,
         Long categoryId,
         Double price,
-        boolean active
+        boolean active,
+        String providerId,
+        String providerName,
+        ProductStatus status
 ) {
     public static ProductResponse from(Product product) {
         return new ProductResponse(
@@ -17,7 +21,10 @@ public record ProductResponse(
                 product.getDescription(),
                 product.getCategoryId(),
                 product.getPrice(),
-                product.isActive()
+                product.isActive(),
+                product.getProviderId(),
+                product.getProviderName(),
+                product.getStatus()
         );
     }
 }

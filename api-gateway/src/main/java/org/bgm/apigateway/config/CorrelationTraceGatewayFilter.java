@@ -1,6 +1,8 @@
 package org.bgm.apigateway.config;
 
 import org.bgm.common.correlation.CorrelationConstants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -22,6 +24,8 @@ import java.util.UUID;
 @Component
 public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
+    private static final Logger log = LoggerFactory.getLogger(CorrelationTraceGatewayFilter.class);
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
@@ -41,7 +45,41 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         exchange.getResponse().getHeaders().set(CorrelationConstants.CORRELATION_ID_HEADER, correlationId);
         exchange.getResponse().getHeaders().set(CorrelationConstants.TRACE_ID_HEADER, traceId);
 
-        return chain.filter(exchange.mutate().request(mutatedRequest).build());
+        // Gateway is WebFlux (reactive) — MDC doesn't survive a thread
+        // hop between operators the way it does in the servlet backends'
+        // CorrelationTraceFilter, so a request handled/failed entirely
+        // inside the gateway (a circuit-breaker fallback, a 403 from
+        // RequireRoleGatewayFilterFactory) would otherwise leave no
+        // grep-able trail here. One explicit log line on non-2xx keeps
+        // "find the exception" (see doc/architecture — Grafana/Loki
+        // walkthrough) working for gateway-originated failures, not just
+        // ones a downstream servlet service produced.
+        // A downstream servlet backend's own CorrelationTraceFilter also
+        // echoes these same two headers on ITS response; Spring Cloud
+        // Gateway's routing filter merges that onto this exchange's
+        // response by ADDING rather than replacing — found live as a
+        // literal "id, id" duplicate on the browser-visible header. The
+        // RemoveResponseHeader filter (each route's default-filters,
+        // gateway-routes ConfigMap) strips the downstream copy before
+        // the merge lands, so the single value set above survives as
+        // the only one. Fixing it here (post-response, by re-setting)
+        // isn't reliable — by the time this Mono completes the response
+        // may already be committed/flushed.
+        return chain.filter(exchange.mutate().request(mutatedRequest).build())
+                .doOnSuccess(v -> logIfError(exchange, correlationId, traceId, null))
+                .doOnError(ex -> logIfError(exchange, correlationId, traceId, ex));
+    }
+
+    private void logIfError(ServerWebExchange exchange, String correlationId, String traceId, Throwable ex) {
+        int status = exchange.getResponse().getStatusCode() != null
+                ? exchange.getResponse().getStatusCode().value() : 0;
+        if (ex != null) {
+            log.warn("[correlationId={},traceId={}] gateway request failed: {} {} -> {}",
+                    correlationId, traceId, exchange.getRequest().getMethod(), exchange.getRequest().getPath(), ex.toString());
+        } else if (status >= 400) {
+            log.warn("[correlationId={},traceId={}] gateway request non-2xx: {} {} -> {}",
+                    correlationId, traceId, exchange.getRequest().getMethod(), exchange.getRequest().getPath(), status);
+        }
     }
 
     @Override

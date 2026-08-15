@@ -49,6 +49,7 @@ metadata:
   namespace: ecom
 spec:
   replicas: 1
+  strategy: { type: Recreate }
   selector:
     matchLabels: { app: loki }
   template:
@@ -223,6 +224,7 @@ metadata:
   namespace: ecom
 spec:
   replicas: 1
+  strategy: { type: Recreate }
   selector:
     matchLabels: { app: alloy }
   template:

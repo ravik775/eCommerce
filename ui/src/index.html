@@ -17,6 +17,7 @@
       <h2>Catalog</h2>
       <input id="search" type="text" placeholder="Search products…" />
       <ul id="products"></ul>
+      <div id="products-pager"></div>
     </section>
 
     <section id="cart">
@@ -25,6 +26,40 @@
       <p>Total: $<span id="cart-total">0.00</span></p>
       <button id="checkout" disabled>Checkout</button>
       <p id="checkout-status"></p>
+    </section>
+
+    <!-- ADR-0031: minimal order history — status only, no cancel/return
+         actions and no per-order line-item drill-down (deliberate scope
+         line, see the ADR). -->
+    <section id="orders">
+      <h2>My Orders</h2>
+      <ul id="order-list"></ul>
+    </section>
+
+    <!-- Hidden by default (app.js unhides based on the roles /user/me
+         returns) — PROVIDER only, not shown to CUSTOMER/ADMIN-only users. -->
+    <section id="provider-panel" hidden>
+      <h2>My Products (Provider)</h2>
+      <form id="provider-form">
+        <input id="p-name" type="text" placeholder="Name" required />
+        <input id="p-description" type="text" placeholder="Description" />
+        <input id="p-price" type="number" step="0.01" min="0" placeholder="Price" required />
+        <input id="p-quantity" type="number" min="0" placeholder="Initial quantity" required />
+        <button type="submit">Add Product</button>
+      </form>
+      <p id="provider-status"></p>
+      <ul id="provider-products"></ul>
+    </section>
+
+    <!-- ADMIN only — restock any product by ID. -->
+    <section id="admin-panel" hidden>
+      <h2>Restock (Admin)</h2>
+      <form id="restock-form">
+        <input id="r-product-id" type="number" placeholder="Product ID" required />
+        <input id="r-quantity" type="number" min="1" placeholder="Quantity to add" required />
+        <button type="submit">Add Stock</button>
+      </form>
+      <p id="restock-status"></p>
     </section>
   </main>
 

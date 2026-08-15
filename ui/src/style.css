@@ -11,3 +11,9 @@ button { background: #1a1a1a; color: white; border: none; padding: .4rem .8rem; 
 button:disabled { background: #ccc; cursor: not-allowed; }
 #checkout { width: 100%; margin-top: 1rem; padding: .7rem; }
 #checkout-status { font-size: .9rem; }
+#provider-panel, #admin-panel { grid-column: 1 / -1; }
+#provider-form, #restock-form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .75rem; }
+#provider-form input, #restock-form input { padding: .4rem; border: 1px solid #ccc; border-radius: 4px; }
+#provider-status, #restock-status { font-size: .9rem; }
+#provider-products { list-style: none; padding: 0; margin: 0; }
+#provider-products li { padding: .3rem 0; border-bottom: 1px solid #eee; }

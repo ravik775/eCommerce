@@ -59,6 +59,7 @@ spec:
         - podSelector: { matchLabels: { app: catalog-service } }
         - podSelector: { matchLabels: { app: user-service } } # Phase 8: /user/me
         - podSelector: { matchLabels: { app: ui } }            # Phase 8: static UI catch-all route
+        - podSelector: { matchLabels: { app: inventory-service } } # Phase 8: admin/provider restock
         - podSelector: { matchLabels: { app: redis } }
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Keycloak (host container)
 ---
@@ -100,6 +101,9 @@ spec:
       ports: [{ protocol: TCP, port: 9083 }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Keycloak
+    # Phase 8: InventoryServiceClient seeds initial stock right after
+    # creating a provider/admin product.
+    - to: [{ podSelector: { matchLabels: { app: inventory-service } } }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -112,6 +116,9 @@ spec:
   ingress:
     - from: [{ podSelector: { matchLabels: { app: prometheus } } }]
       ports: [{ protocol: TCP, port: 9084 }]
+    # Phase 8: admin/provider restock calls (POST /inventory/add) now
+    # come through the gateway, not just internal Kafka consumers.
+    - from: [{ podSelector: { matchLabels: { app: api-gateway } } }]
   egress:
     - to: [{ ipBlock: { cidr: 192.168.65.254/32 } }] # Postgres, Kafka, Keycloak
 ---

@@ -16,6 +16,21 @@ data:
     spring:
       cloud:
         gateway:
+          # A servlet backend's own CorrelationTraceFilter echoes
+          # X-Correlation-Id/X-Trace-Id on ITS response with the same
+          # value CorrelationTraceGatewayFilter already set on this
+          # exchange — Spring Cloud Gateway's routing filter merges the
+          # two by ADDING rather than replacing, producing a literal
+          # "id, id" duplicate (found live via a browser fetch on a real
+          # checkout call). RemoveResponseHeader would strip the header
+          # entirely (both values share one key); DedupeResponseHeader
+          # with RETAIN_UNIQUE is the built-in filter for exactly this
+          # "two layers set the same header" case.
+          default-filters:
+            - name: DedupeResponseHeader
+              args:
+                name: X-Correlation-Id X-Trace-Id
+                strategy: RETAIN_UNIQUE
           routes:
             - id: order-service
               # https, not http: order-service enforces inbound mTLS
@@ -97,7 +112,31 @@ data:
                     statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
                 - StripPrefix=1
                 - TokenRelay=
-                - RequireRole=ADMIN
+                # Phase 8 provider feature: PROVIDER can create/edit/
+                # delete their own products now, not just ADMIN — this
+                # is only the coarse edge gate (any of the two roles get
+                # past the gateway at all); catalog-service's own
+                # ownership check (ProductService) is what actually
+                # stops a PROVIDER from touching another provider's
+                # product, same split of responsibility this filter's
+                # own class Javadoc already documents.
+                #
+                # name/args form, NOT the `RequireRole=ADMIN,PROVIDER`
+                # shortcut string: Spring Cloud Gateway's shortcut
+                # notation splits on comma as the ARGUMENT delimiter
+                # (`Filter=arg1,arg2`), and this factory only declares
+                # one positional field ("role") — so the shortcut form
+                # silently bound role="ADMIN" and dropped ",PROVIDER"
+                # entirely. Found live via the new ACCESS_DENIED audit
+                # log line showing requiredRoles=[ROLE_ADMIN] only, which
+                # means every PROVIDER request had been 403'd at the
+                # gateway edge this whole time despite catalog-service's
+                # own @PreAuthorize correctly allowing PROVIDER. The
+                # name/args map form passes "ADMIN,PROVIDER" as one
+                # literal string value with no comma-splitting ambiguity.
+                - name: RequireRole
+                  args:
+                    role: ADMIN,PROVIDER
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@userKeyResolver}"
@@ -144,6 +183,27 @@ data:
               filters:
                 - RewritePath=/user(?<remaining>.*), /users${remaining}
                 - TokenRelay=
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+            - id: inventory-service
+              # https, not http: inventory-service enforces inbound mTLS
+              # (ADR-0002), same as every other backend route here. No
+              # RewritePath/StripPrefix: InventoryController is mapped
+              # at /inventory (matching the gateway's own public path
+              # exactly), unlike order/user which needed a rewrite.
+              uri: https://inventory-service:8084
+              predicates:
+                - Path=/inventory/**
+              filters:
+                - TokenRelay=
+                # See catalog-service-admin route above for why this must
+                # be the name/args form, not the comma-shortcut string.
+                - name: RequireRole
+                  args:
+                    role: ADMIN,PROVIDER
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@userKeyResolver}"

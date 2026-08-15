@@ -1,4 +1,5 @@
 org.bgm.common.correlation.CorrelationAutoConfiguration
+org.bgm.common.audit.AuditAutoConfiguration
 org.bgm.common.event.schema.EventSchemaAutoConfiguration
 org.bgm.common.security.SecurityAutoConfiguration
 org.bgm.common.spiffe.SpiffeMtlsAutoConfiguration

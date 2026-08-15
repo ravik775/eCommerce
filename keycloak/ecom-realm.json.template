@@ -9,7 +9,8 @@
     "realm": [
       { "name": "CUSTOMER", "description": "Can browse catalog and place/cancel/return orders" },
       { "name": "ADMIN", "description": "Can manage catalog in addition to CUSTOMER capabilities" },
-      { "name": "SUPER_ADMIN", "description": "Can manage users/roles in addition to ADMIN capabilities" }
+      { "name": "SUPER_ADMIN", "description": "Can manage users/roles in addition to ADMIN capabilities" },
+      { "name": "PROVIDER", "description": "Can create/edit/deactivate their own catalog products and add stock for them (Phase 8) — no admin/customer capability implied, not a superset of either" }
     ]
   },
   "clients": [
@@ -134,6 +135,17 @@
       "credentials": [{ "type": "password", "value": "superadmin1-pass", "temporary": false }],
       "requiredActions": [],
       "realmRoles": ["SUPER_ADMIN", "ADMIN", "CUSTOMER"]
+    },
+    {
+      "username": "provider1",
+      "enabled": true,
+      "firstName": "Test",
+      "lastName": "Provider",
+      "email": "provider1@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "provider1-pass", "temporary": false }],
+      "requiredActions": [],
+      "realmRoles": ["PROVIDER"]
     }
   ]
 }

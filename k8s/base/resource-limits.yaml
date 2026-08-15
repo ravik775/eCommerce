@@ -6,6 +6,15 @@
 # defaults alone) — this ResourceQuota is the namespace-wide ceiling on
 # top of that, and the LimitRange is a safety net for any container spec
 # that forgets to set its own.
+#
+# Every Deployment in this directory also sets `strategy: { type: Recreate }`
+# (not the RollingUpdate default): RollingUpdate briefly runs old+new pod
+# together, needing ~2x steady-state memory as headroom, which this
+# single-replica dev cluster doesn't have even at requests.memory: 5Gi —
+# found live as repeated FailedCreate/quota-exceeded events during
+# routine redeploys. Recreate trades a few seconds of pod downtime for
+# zero surge requirement, which costs nothing extra here since a single
+# replica has no redundancy to lose from that downtime anyway.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -14,7 +23,15 @@ metadata:
 spec:
   hard:
     requests.cpu: "4"
-    requests.memory: 4Gi
+    # Raised from 4Gi: at 4Gi, steady-state usage across ~13 services
+    # already consumed the whole ceiling, leaving zero surge headroom for
+    # a RollingUpdate (which briefly runs old+new pod together) — every
+    # rolling deployment in this namespace failed to schedule its new pod
+    # until an old one was manually deleted first. 5Gi leaves real surge
+    # room without exceeding the Docker Desktop VM's ~7.6GiB total (the
+    # standalone Postgres/Kafka/Keycloak containers run outside this
+    # namespace/quota and need their own share of that same VM memory).
+    requests.memory: 5Gi
     limits.cpu: "8"
     limits.memory: 8Gi
     pods: "30"

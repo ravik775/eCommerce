@@ -15,14 +15,16 @@ import java.util.Map;
  * grepped out of pod logs, not a log-aggregation stack, since none
  * exists here — see ADR-0023).
  * <p>
- * Deliberately NOT keyed by the request-scoped correlation ID
- * (ADR-0023's {@code CorrelationConstants}): that ID doesn't survive a
- * Kafka hop (no header propagation into event payloads), so a login →
- * order-created → payment-outcome sequence can never share one. The
- * actual join keys across this trail are {@code customerId} (login →
- * order) and {@code orderId} (order → payment) — both already present
- * on every event in this saga (ADR-0007), so no new correlation
- * mechanism is needed.
+ * Not keyed by the request-scoped correlation ID directly (ADR-0023's
+ * {@code CorrelationConstants}) — the LOGIN event has no order yet, so
+ * it can only join to what follows via {@code customerId}. Once an
+ * order exists, every subsequent step (ORDER_CREATED onward) DOES share
+ * one correlation ID: {@link org.bgm.common.correlation.OrderCorrelationScope}
+ * sets it to the order ID itself across the Kafka-driven saga
+ * (order-service, inventory-service, payment-service, notification-service),
+ * so those events ARE already joinable as one correlationId in the logs
+ * even though this logger doesn't additionally stamp it on the audit
+ * line — the surrounding log line (same MDC) carries it.
  * <p>
  * One INFO line per event on a dedicated "AUDIT" logger name (not the
  * class's own logger) so a deployment can route/filter/sample it
