@@ -24,6 +24,7 @@ spec:
           envFrom:
             - configMapRef: { name: common-config }
             - secretRef: { name: app-datasource-secret }
+            - secretRef: { name: payment-service-oauth2-secret }
           env:
             - { name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://host.docker.internal:5432/ecommerce?currentSchema=payment_service" }
             - { name: SERVER_PORT, value: "8085" }
@@ -38,6 +39,12 @@ spec:
             # ADR-0002: enables common-lib's SPIFFE mTLS auto-config —
             # inbound Tomcat connector now requires a client SVID.
             - { name: SPIFFE_MTLS_ENABLED, value: "true" }
+            # ServiceTokenProvider: internal (container-to-container)
+            # Keycloak address — matches api-gateway's own
+            # KEYCLOAK_TOKEN_URI, same LOCAL-DEV DEVIATION (Keycloak runs
+            # as a standalone host container, not a K8s pod, per
+            # k8s/base/configmap-common.yaml).
+            - { name: KEYCLOAK_TOKEN_URI, value: "http://host.docker.internal:8090/realms/ecom/protocol/openid-connect/token" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
             limits: { cpu: 500m, memory: 512Mi }

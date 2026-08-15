@@ -35,6 +35,7 @@ resources:
   - networkpolicy.yaml
   - prometheus.yaml
   - grafana.yaml
+  - loki.yaml
 # configMapGenerator for the Keycloak realm-import ConfigMap is removed
 # along with keycloak.yaml above (Keycloak runs as a standalone host
 # container locally, importing the realm via a direct volume mount

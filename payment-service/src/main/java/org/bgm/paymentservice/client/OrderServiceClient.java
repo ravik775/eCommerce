@@ -4,6 +4,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
@@ -20,6 +23,7 @@ import org.springframework.web.client.RestTemplate;
 public class OrderServiceClient {
 
     private final RestTemplate restTemplate;
+    private final ServiceTokenProvider serviceTokenProvider;
 
     @CircuitBreaker(name = "orderServiceLookup", fallbackMethod = "fallbackGetOrderAmount")
     @Retry(name = "orderServiceLookup")
@@ -36,8 +40,21 @@ public class OrderServiceClient {
         // server, so a @LoadBalanced RestTemplate has no ServiceInstance
         // to resolve "ORDER-SERVICE" to and fails with "Service Instance
         // cannot be null, serviceId: ORDER-SERVICE" (confirmed live).
-        OrderLookupResponse response = restTemplate.getForObject(
-                "https://order-service:8082/orders/" + orderId, OrderLookupResponse.class);
+        //
+        // Bearer token required: order-service's SecurityAutoConfiguration
+        // is an OAuth2 resource server (.anyRequest().authenticated()) —
+        // mTLS alone proves this call comes from a trusted workload, not
+        // that the caller passes application-level auth. Found live: every
+        // checkout 401'd here with no Authorization header at all, since
+        // this was the one synchronous call the choreography saga
+        // actually makes (ADR-0007) and nothing had ever exercised it in
+        // anger until Phase 8's UI made a real checkout possible.
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(serviceTokenProvider.getBearerToken());
+        OrderLookupResponse response = restTemplate.exchange(
+                        "https://order-service:8082/orders/" + orderId, HttpMethod.GET,
+                        new HttpEntity<>(headers), OrderLookupResponse.class)
+                .getBody();
         if (response == null || response.totalAmount() == null) {
             throw new OrderLookupException(orderId, null);
         }

@@ -1,0 +1,272 @@
+# Log aggregation for end-to-end request tracing (correlationId/traceId/
+# userId/orderId — see AuditLogger and ADR-0023). Prometheus/Grafana
+# alone only cover metrics; there was no way to actually search log
+# lines across services until now. Loki (single-binary, filesystem
+# storage — no object store needed at this scale) + Promtail (ships
+# every pod's stdout, same source `kubectl logs` already reads).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: ecom
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      # Local-dev scale, not production sizing — permissive enough that
+      # a 1000-product catalog browse session doesn't trip ingestion
+      # limits while testing.
+      ingestion_rate_mb: 16
+      ingestion_burst_size_mb: 32
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: loki }
+  template:
+    metadata:
+      labels: { app: loki }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: loki
+          image: grafana/loki:3.2.1
+          args: ["-config.file=/etc/loki/loki.yaml"]
+          ports: [{ containerPort: 3100 }]
+          volumeMounts:
+            - { name: config, mountPath: /etc/loki }
+            - { name: data, mountPath: /loki }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+      volumes:
+        - { name: config, configMap: { name: loki-config } }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: ecom
+spec:
+  selector: { app: loki }
+  ports: [{ port: 3100, targetPort: 3100 }]
+---
+# Grafana Alloy (Promtail's actively-maintained successor — switched to
+# after Promtail's Kubernetes service-discovery produced zero scrape
+# targets here for reasons that couldn't be root-caused without pod
+# shell access, which this environment's kubectl exec doesn't support).
+# loki.source.kubernetes fetches logs via the Kubernetes API's own
+# pods/log subresource (the same mechanism `kubectl logs` uses) instead
+# of tailing hostPath files — no node-level file access needed at all,
+# so this runs as an ordinary Deployment fully compliant with ecom's
+# "restricted" PSS (ADR-0020), not a DaemonSet requiring its own
+# unrestricted namespace the way Promtail's hostPath approach did.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: ecom
+data:
+  config.alloy: |
+    discovery.kubernetes "pods" {
+      role = "pod"
+      namespaces {
+        own_namespace = false
+        names         = ["ecom"]
+      }
+    }
+
+    discovery.relabel "pods" {
+      targets = discovery.kubernetes.pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app"]
+        target_label  = "app"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+    }
+
+    loki.source.kubernetes "pods" {
+      targets    = discovery.relabel.pods.output
+      forward_to = [loki.process.add_labels.receiver]
+    }
+
+    // Same correlationId/traceId/auditEvent/orderId/customerId
+    // extraction Promtail's pipeline_stages did — see
+    // k8s/base/configmap-common.yaml's LOGGING_PATTERN_LEVEL and
+    // common-lib's AuditLogger for the log line shapes these match.
+    loki.process "add_labels" {
+      forward_to = [loki.write.default.receiver]
+
+      stage.regex {
+        expression = ".*correlationId=(?P<correlationId>[^,]*),traceId=(?P<traceId>[^\\]]*)\\].*"
+      }
+      stage.labels {
+        values = {
+          correlationId = "",
+          traceId       = "",
+        }
+      }
+      stage.regex {
+        expression = "auditEvent=(?P<auditEvent>\\S+)(?:.*orderId=(?P<orderId>\\S+))?(?:.*customerId=(?P<customerId>\\S+))?"
+      }
+      stage.labels {
+        values = {
+          auditEvent = "",
+          orderId    = "",
+          customerId = "",
+        }
+      }
+    }
+
+    loki.write "default" {
+      endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+      }
+    }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  namespace: ecom
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: alloy-pods
+  namespace: ecom
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "watch", "list"]
+  # loki.source.kubernetes reads logs via the pods/log subresource —
+  # the same permission `kubectl logs` itself needs.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alloy-pods
+  namespace: ecom
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: ecom
+roleRef:
+  kind: Role
+  name: alloy-pods
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alloy
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: alloy }
+  template:
+    metadata:
+      labels: { app: alloy }
+    spec:
+      serviceAccountName: alloy
+      securityContext:
+        runAsNonRoot: true
+        # grafana/alloy's image actually defaults to root (confirmed
+        # live: omitting runAsUser hit CreateContainerConfigError,
+        # "runAsNonRoot requires that the specified user (0) be
+        # non-root") — 472 matches Grafana's own ecosystem-wide
+        # non-root UID convention (same one this cluster's grafana pod
+        # already uses successfully, k8s/base/grafana.yaml).
+        runAsUser: 472
+        runAsGroup: 472
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.5.1
+          # /tmp, not an emptyDir volume: fsGroup did not correctly
+          # chown an emptyDir mount in this environment (Docker Desktop
+          # on Windows) — "mkdir ...: permission denied" persisted even
+          # with fsGroup matching runAsUser/runAsGroup exactly, live,
+          # more than once. /tmp is world-writable in the container's
+          # own writable root filesystem by default (no
+          # readOnlyRootFilesystem set here), sidestepping the whole
+          # volume-ownership question. State here doesn't need to
+          # survive a restart (this is a log shipper's own bookkeeping,
+          # not the log data itself).
+          args: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/tmp/alloy-data", "/etc/alloy/config.alloy"]
+          ports: [{ containerPort: 12345 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/alloy }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 12345 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - { name: config, configMap: { name: alloy-config } }

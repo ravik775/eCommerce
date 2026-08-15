@@ -9,15 +9,40 @@
 const cart = []; // [{ productId, name, unitPrice, quantity }]
 let me = null;
 
+// ADR-0023: correlation ID and trace ID are distinct, with distinct
+// uniqueness guarantees. This UI is the true entry point for end-to-end
+// tracing (the gateway is reactive/WebFlux and doesn't run
+// CorrelationTraceFilter, which only auto-registers into servlet-based
+// backend services) — without the browser setting these, each backend
+// service independently generated its own random one per request,
+// making a single user action impossible to trace across hops. traceId
+// is fixed for this whole page session (one browser tab = one trace);
+// correlationId is fresh per individual API call. Both are honored by
+// CorrelationTraceFilter if present on the incoming request rather than
+// generated fresh, so setting them here is what actually makes them
+// consistent downstream.
+const TRACE_ID = crypto.randomUUID();
+
+function apiFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-Correlation-Id': crypto.randomUUID(),
+      'X-Trace-Id': TRACE_ID,
+    },
+  });
+}
+
 async function loadMe() {
-  const res = await fetch('/user/me');
+  const res = await apiFetch('/user/me');
   if (!res.ok) throw new Error(`GET /user/me -> ${res.status}`);
   me = await res.json();
   document.getElementById('whoami').textContent = `${me.name || me.email} (${me.roles.join(', ')})`;
 }
 
 async function loadProducts(query = '') {
-  const res = await fetch(`/catalog/products/search?query=${encodeURIComponent(query)}`);
+  const res = await apiFetch(`/catalog/products/search?query=${encodeURIComponent(query)}`);
   if (!res.ok) throw new Error(`GET /catalog/products/search -> ${res.status}`);
   const products = await res.json();
   const list = document.getElementById('products');
@@ -61,9 +86,17 @@ async function checkout() {
   const status = document.getElementById('checkout-status');
   status.textContent = 'Placing order…';
   try {
-    const res = await fetch('/order', {
+    const res = await apiFetch('/order', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // A fresh key per checkout click — order-service's
+        // IdempotencyService treats the same key as "already handled"
+        // and replays the first response instead of creating a second
+        // order, so an accidental double-click (or the browser retrying
+        // a request it thinks failed) can't double-charge a cart.
+        'Idempotency-Key': crypto.randomUUID(),
+      },
       body: JSON.stringify({
         customerId: me.id,
         items: cart.map((i) => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice })),

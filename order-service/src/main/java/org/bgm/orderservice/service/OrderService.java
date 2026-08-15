@@ -2,6 +2,7 @@ package org.bgm.orderservice.service;
 
 import lombok.RequiredArgsConstructor;
 import org.bgm.common.audit.AuditLogger;
+import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.event.schema.EventType;
 import org.bgm.orderservice.dto.CreateOrderRequest;
 import org.bgm.orderservice.event.OrderCancelledEvent;
@@ -15,6 +16,7 @@ import org.bgm.orderservice.model.OrderItem;
 import org.bgm.orderservice.model.OrderStatus;
 import org.bgm.orderservice.model.PaymentStatus;
 import org.bgm.orderservice.repository.OrderRepository;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +57,14 @@ public class OrderService {
         order.setTotalAmount(total);
 
         order = orderRepository.save(order); // IDENTITY strategy: id populated immediately
+
+        // From here on, this request's log lines (and everything the
+        // rest of this saga does downstream via Kafka — see
+        // OrderCorrelationScope) are tagged with the order ID itself as
+        // the correlation ID, not the random one CorrelationTraceFilter
+        // assigned at request entry: the order ID is what's actually
+        // shared across every hop of this saga, and is now known.
+        MDC.put(CorrelationConstants.MDC_CORRELATION_ID_KEY, String.valueOf(order.getId()));
 
         // ADR-0007: outbox row written in this same transaction as the
         // order row above — atomic, closes the dual-write problem.

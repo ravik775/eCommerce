@@ -3,6 +3,7 @@ package org.bgm.orderservice.event;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.orderservice.model.ProcessedEvent;
 import org.bgm.orderservice.repository.ProcessedEventRepository;
 import org.bgm.orderservice.service.OrderService;
@@ -31,35 +32,41 @@ public class OrderSagaConsumer {
     @Transactional
     public void onPaymentSuccess(String message) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
-        if (alreadyProcessed(event.eventId())) {
-            return;
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+            if (alreadyProcessed(event.eventId())) {
+                return;
+            }
+            orderService.applyPaymentOutcome(event.orderId(), true);
+            markProcessed(event.eventId());
         }
-        orderService.applyPaymentOutcome(event.orderId(), true);
-        markProcessed(event.eventId());
     }
 
     @KafkaListener(topics = "payment-failed", groupId = "order-service")
     @Transactional
     public void onPaymentFailed(String message) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        if (alreadyProcessed(event.eventId())) {
-            return;
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+            if (alreadyProcessed(event.eventId())) {
+                return;
+            }
+            orderService.applyPaymentOutcome(event.orderId(), false);
+            markProcessed(event.eventId());
+            log.info("Order {} payment failed: {}", event.orderId(), event.reason());
         }
-        orderService.applyPaymentOutcome(event.orderId(), false);
-        markProcessed(event.eventId());
-        log.info("Order {} payment failed: {}", event.orderId(), event.reason());
     }
 
     @KafkaListener(topics = "inventory-reservation-failed", groupId = "order-service")
     @Transactional
     public void onInventoryReservationFailed(String message) throws Exception {
         InventoryReservationFailedEvent event = objectMapper.readValue(message, InventoryReservationFailedEvent.class);
-        if (alreadyProcessed(event.eventId())) {
-            return;
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId())) {
+            if (alreadyProcessed(event.eventId())) {
+                return;
+            }
+            orderService.applyInventoryReservationFailure(event.orderId());
+            markProcessed(event.eventId());
+            log.info("Order {} inventory reservation failed: {}", event.orderId(), event.reason());
         }
-        orderService.applyInventoryReservationFailure(event.orderId());
-        markProcessed(event.eventId());
-        log.info("Order {} inventory reservation failed: {}", event.orderId(), event.reason());
     }
 
     private boolean alreadyProcessed(String eventId) {

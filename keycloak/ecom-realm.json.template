@@ -62,6 +62,18 @@
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }
+    },
+    {
+      "clientId": "payment-service",
+      "name": "payment-service (service account)",
+      "description": "client_credentials only — payment-service's OrderServiceClient needs a service-account JWT to call order-service's protected GET /orders/{id} (ADR-0007). See ServiceTokenProvider's Javadoc.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${PAYMENT_SERVICE_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
     }
   ],
   "identityProviders": [

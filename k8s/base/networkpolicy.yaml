@@ -236,3 +236,36 @@ spec:
     - {}
   egress:
     - to: [{ podSelector: { matchLabels: { app: prometheus } } }]
+    - to: [{ podSelector: { matchLabels: { app: loki } } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: loki } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: grafana } }
+        - podSelector: { matchLabels: { app: alloy } }
+---
+# Alloy (log shipper, k8s/base/loki.yaml) — no hostPath needed (reads
+# logs via the Kubernetes API's pods/log subresource, not node files),
+# so unlike Promtail this runs in ecom itself under the namespace's own
+# NetworkPolicy, not a separate unrestricted namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alloy-policy
+  namespace: ecom
+spec:
+  podSelector: { matchLabels: { app: alloy } }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: loki } } }]
+    # Kubernetes API server (pod/log discovery) — outside the pod CIDR,
+    # not a podSelector-expressible target.
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0 } }]
+      ports: [{ protocol: TCP, port: 443 }, { protocol: TCP, port: 6443 }]

@@ -38,6 +38,9 @@ fi
 : "${KEYCLOAK_GATEWAY_CLIENT_SECRET:=gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}"
 export KEYCLOAK_GATEWAY_CLIENT_SECRET
 
+: "${PAYMENT_SERVICE_CLIENT_SECRET:=payment-service-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}"
+export PAYMENT_SERVICE_CLIENT_SECRET
+
 # Empty (not a fake placeholder) until real Google OAuth credentials are
 # supplied — Keycloak's own admin console rejects an identity provider
 # with an empty clientId/clientSecret at runtime rather than silently
@@ -48,5 +51,5 @@ export KEYCLOAK_GATEWAY_CLIENT_SECRET
 : "${GOOGLE_CLIENT_SECRET:=}"
 export GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
 
-envsubst '${KEYCLOAK_GATEWAY_CLIENT_SECRET} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET}' < "$TEMPLATE" > "$OUTPUT"
+envsubst '${KEYCLOAK_GATEWAY_CLIENT_SECRET} ${PAYMENT_SERVICE_CLIENT_SECRET} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET}' < "$TEMPLATE" > "$OUTPUT"
 echo "[render-realm-config] Wrote $OUTPUT from $TEMPLATE"
