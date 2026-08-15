@@ -1,5 +1,11 @@
 .idea/**
 target/
+# Real local-dev credential overrides (see .env.example) — never committed.
+.env
+# The Sealed Secrets master private key — never committed, ever. Back it
+# up yourself to a password manager/secure vault; see
+# doc/architecture/12-secrets-management.md.
+secrets-backup/
 scripts/.dev-logs/
 scripts/.dev-pids/
 pom.xml.tag

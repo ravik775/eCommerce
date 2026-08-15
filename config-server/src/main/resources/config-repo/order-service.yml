@@ -17,7 +17,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/ecommerce?currentSchema=order_service
     username: ecommerce_dev
-    password: PRMbIw12h6JxrkkIruKqh65g
+    password: ${POSTGRES_PASSWORD:changeme-postgres-dev}
     driver-class-name: org.postgresql.Driver
   jpa:
     properties:

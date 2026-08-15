@@ -93,7 +93,7 @@ log "=== infra containers ==="
 ensure_container ecommerce-postgres-dev \
   -p 5432:5432 \
   -e POSTGRES_USER=ecommerce_dev \
-  -e POSTGRES_PASSWORD=PRMbIw12h6JxrkkIruKqh65g \
+  -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme-postgres-dev}" \
   -e POSTGRES_DB=ecommerce \
   postgres:16-alpine
 
@@ -113,13 +113,13 @@ ensure_container ecommerce-kafka-dev \
 ensure_container ecommerce-rabbitmq-dev \
   -p 5673:5672 -p 15673:15672 \
   -e RABBITMQ_DEFAULT_USER=ecommerce_dev \
-  -e RABBITMQ_DEFAULT_PASS=PRMbIw12h6JxrkkIruKqh65g \
+  -e RABBITMQ_DEFAULT_PASS="${RABBITMQ_PASSWORD:-changeme-rabbitmq-dev}" \
   rabbitmq:3.13-management-alpine
 
 ensure_container ecommerce-keycloak-dev \
   -p 8090:8080 \
   -e KEYCLOAK_ADMIN=admin \
-  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}" \
   -v "${ROOT_DIR}/keycloak:/opt/keycloak/data/import" \
   quay.io/keycloak/keycloak:26.0 start-dev --import-realm
 

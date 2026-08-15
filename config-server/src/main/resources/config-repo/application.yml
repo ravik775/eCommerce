@@ -36,7 +36,7 @@ spring:
     host: localhost
     port: 5673
     username: ecommerce_dev
-    password: PRMbIw12h6JxrkkIruKqh65g
+    password: ${POSTGRES_PASSWORD:changeme-postgres-dev}
 
   # ADR-0001 (Keycloak/OIDC IdP) / ADR-0025 (JWT + RBAC): every service
   # validates the same Keycloak-issued JWT independently (ADR-0005 defense

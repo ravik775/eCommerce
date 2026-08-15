@@ -27,7 +27,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ecommerce_dev
-      POSTGRES_PASSWORD: PRMbIw12h6JxrkkIruKqh65g
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-postgres-dev}
       POSTGRES_DB: ecommerce
     ports: ["5432:5432"]
     healthcheck:
@@ -59,7 +59,7 @@ services:
     image: rabbitmq:3.13-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: ecommerce_dev
-      RABBITMQ_DEFAULT_PASS: PRMbIw12h6JxrkkIruKqh65g
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-changeme-rabbitmq-dev}
     ports: ["5673:5672", "15673:15672"]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
@@ -81,7 +81,7 @@ services:
     command: start-dev --import-realm
     environment:
       KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       # Full URL required: hostname-backchannel-dynamic rejects a bare
       # hostname (found live — Keycloak refused to start with
       # "hostname-backchannel-dynamic must be set to false if hostname is
@@ -116,6 +116,14 @@ services:
   config-server:
     build: { context: ., dockerfile: config-server/Dockerfile }
     ports: ["8888:8888"]
+    # Passed through so config-server can resolve the ${POSTGRES_PASSWORD}
+    # placeholder in config-repo/*.yml before serving it to clients —
+    # Spring Cloud Config Server resolves placeholders against its OWN
+    # environment, not the requesting client's, so this must be set here
+    # even though the actual Postgres connection happens in each
+    # downstream service's own container.
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-postgres-dev}
     # HTTP-200-only check, not a body/"UP" match: config-server's own
     # /actuator/health is shadowed by its generic Environment Controller
     # route (Spring Cloud Config Server maps /{application}/{profile}
