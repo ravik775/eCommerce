@@ -130,7 +130,7 @@ data:
                 # audit log line showing requiredRoles=[ROLE_ADMIN] only.
                 #
                 # ADR-0033: CATALOG_ADMIN, not the old catch-all ADMIN
-                # (no longer operational) — SUPER_ADMIN is a Keycloak
+                # (no longer operational) — PLATFORM_ADMIN is a Keycloak
                 # composite role, so its JWT already carries CATALOG_ADMIN
                 # via composite expansion and doesn't need listing here.
                 - name: RequireRole
