@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>eCommerce</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>eCommerce</h1>
+    <div id="whoami">Loading…</div>
+  </header>
+
+  <main>
+    <section id="catalog">
+      <h2>Catalog</h2>
+      <input id="search" type="text" placeholder="Search products…" />
+      <ul id="products"></ul>
+    </section>
+
+    <section id="cart">
+      <h2>Cart</h2>
+      <ul id="cart-items"></ul>
+      <p>Total: $<span id="cart-total">0.00</span></p>
+      <button id="checkout" disabled>Checkout</button>
+      <p id="checkout-status"></p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

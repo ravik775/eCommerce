@@ -31,6 +31,7 @@ resources:
   - payment-service.yaml
   - notification-service.yaml
   - api-gateway.yaml
+  - ui.yaml
   - networkpolicy.yaml
   - prometheus.yaml
   - grafana.yaml

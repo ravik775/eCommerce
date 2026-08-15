@@ -1,0 +1,51 @@
+# Phase 8: minimal checkout UI. Static files only, served by
+# nginx-unprivileged (see ui/Dockerfile) — no mTLS/SPIFFE here (matches
+# the gateway's own inbound side, which never enforced it either;
+# ADR-0002's inbound-mTLS wiring is a servlet/Tomcat concern, not
+# applicable to this static-file container).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: ecom
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ui }
+  template:
+    metadata:
+      labels: { app: ui }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ui
+          image: ecomd-ui:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: ecom
+spec:
+  selector: { app: ui }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]

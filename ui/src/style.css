@@ -1,0 +1,13 @@
+* { box-sizing: border-box; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f7f7f8; color: #1a1a1a; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #1a1a1a; color: white; }
+header h1 { margin: 0; font-size: 1.25rem; }
+main { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+section { background: white; padding: 1.25rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+#search { width: 100%; padding: .5rem; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+#products, #cart-items { list-style: none; padding: 0; margin: 0; }
+#products li, #cart-items li { display: flex; justify-content: space-between; align-items: center; padding: .5rem 0; border-bottom: 1px solid #eee; }
+button { background: #1a1a1a; color: white; border: none; padding: .4rem .8rem; border-radius: 4px; cursor: pointer; }
+button:disabled { background: #ccc; cursor: not-allowed; }
+#checkout { width: 100%; margin-top: 1rem; padding: .7rem; }
+#checkout-status { font-size: .9rem; }

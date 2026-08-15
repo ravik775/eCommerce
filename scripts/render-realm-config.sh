@@ -38,5 +38,15 @@ fi
 : "${KEYCLOAK_GATEWAY_CLIENT_SECRET:=gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}"
 export KEYCLOAK_GATEWAY_CLIENT_SECRET
 
-envsubst '${KEYCLOAK_GATEWAY_CLIENT_SECRET}' < "$TEMPLATE" > "$OUTPUT"
+# Empty (not a fake placeholder) until real Google OAuth credentials are
+# supplied — Keycloak's own admin console rejects an identity provider
+# with an empty clientId/clientSecret at runtime rather than silently
+# accepting a fake one, so there's no equivalent "changeme-*" default
+# that would let this fail quietly; the realm import itself will error
+# clearly if these are left unset and Google login is actually used.
+: "${GOOGLE_CLIENT_ID:=}"
+: "${GOOGLE_CLIENT_SECRET:=}"
+export GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
+
+envsubst '${KEYCLOAK_GATEWAY_CLIENT_SECRET} ${GOOGLE_CLIENT_ID} ${GOOGLE_CLIENT_SECRET}' < "$TEMPLATE" > "$OUTPUT"
 echo "[render-realm-config] Wrote $OUTPUT from $TEMPLATE"

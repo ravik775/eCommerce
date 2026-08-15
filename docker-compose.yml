@@ -87,9 +87,14 @@ services:
   # path, where this same rendering is done host-side instead).
   keycloak-render-realm:
     image: alpine:3.20
-    entrypoint: ["sh", "-c", "apk add --no-cache gettext >/dev/null && envsubst '$${KEYCLOAK_GATEWAY_CLIENT_SECRET}' < /keycloak/ecom-realm.json.template > /keycloak/ecom-realm.json"]
+    entrypoint: ["sh", "-c", "apk add --no-cache gettext >/dev/null && envsubst '$${KEYCLOAK_GATEWAY_CLIENT_SECRET} $${GOOGLE_CLIENT_ID} $${GOOGLE_CLIENT_SECRET}' < /keycloak/ecom-realm.json.template > /keycloak/ecom-realm.json"]
     environment:
       KEYCLOAK_GATEWAY_CLIENT_SECRET: ${KEYCLOAK_GATEWAY_CLIENT_SECRET:-gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}
+      # Empty until real Google OAuth credentials are supplied — see
+      # scripts/render-realm-config.sh's comment on why there's no fake
+      # default here.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     volumes:
       - ./keycloak:/keycloak
 
@@ -305,3 +310,16 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
+
+  # Phase 8: minimal checkout UI, reached only through api-gateway's
+  # catch-all route (same origin as every API call — see
+  # k8s/base/configmap-gateway-routes.yaml's "ui" route comment). No
+  # host port mapping: browsers hit it via http://localhost:8080/, not
+  # this container directly.
+  ui:
+    build: { context: ./ui, dockerfile: Dockerfile }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

@@ -125,6 +125,48 @@ data:
                     key-resolver: "#{@userKeyResolver}"
                     redis-rate-limiter.replenishRate: 5
                     redis-rate-limiter.burstCapacity: 10
+            - id: user-service
+              # https, not http: user-service enforces inbound mTLS
+              # (ADR-0002), same reasoning as every other backend route
+              # here.
+              uri: https://user-service:8081
+              # Path=/user/** only, not a compound "/user/**,/user" — see
+              # order-service's route comment above for why (a live-found
+              # Spring Cloud Gateway quirk with combined exact+wildcard
+              # Path predicates on non-GET methods). Phase 8's only use
+              # of this route is GET /user/me, a sub-path, so the
+              # ambiguity doesn't even arise here — kept as a single
+              # wildcard predicate anyway, for consistency and to not
+              # reintroduce the same class of bug if a bare /user route
+              # is ever added later.
+              predicates:
+                - Path=/user/**
+              filters:
+                - RewritePath=/user(?<remaining>.*), /users${remaining}
+                - TokenRelay=
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+            - id: ui
+              # Catch-all, deliberately LAST in this route list — Spring
+              # Cloud Gateway tries routes in declaration order, so every
+              # more specific route above (/order, /catalog, /user) still
+              # wins first; this only catches what's left (/, /app.js,
+              # /style.css — the UI's own static files). Plain http, not
+              # https: the UI container is static nginx, never enforced
+              # inbound mTLS (ADR-0002's inbound wiring is a
+              # servlet/Tomcat concern, not applicable here). Same origin
+              # as every API route (this gateway's own port) is the
+              # whole point — the UI's fetch() calls to /catalog, /order,
+              # /user ride the same session cookie with zero CORS
+              # handling needed, per ADR-0005's BFF pattern.
+              uri: http://ui:8080
+              predicates:
+                - Path=/**
+              filters:
+                - TokenRelay=
     resilience4j:
       circuitbreaker:
         instances:
