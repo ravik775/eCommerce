@@ -21,6 +21,7 @@ resources:
   - configmap-common.yaml
   - configmap-gateway-routes.yaml
   - secrets.yaml
+  - rbac-secrets-publisher.yaml
   - rabbitmq.yaml
   - redis.yaml
   - user-service.yaml

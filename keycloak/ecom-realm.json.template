@@ -20,7 +20,7 @@
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
-      "secret": "gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT",
+      "secret": "${KEYCLOAK_GATEWAY_CLIENT_SECRET}",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,

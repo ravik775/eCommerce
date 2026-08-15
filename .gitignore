@@ -6,6 +6,10 @@ target/
 # up yourself to a password manager/secure vault; see
 # doc/architecture/12-secrets-management.md.
 secrets-backup/
+# Generated from keycloak/ecom-realm.json.template by
+# scripts/render-realm-config.sh — the template (committed) holds
+# ${KEYCLOAK_GATEWAY_CLIENT_SECRET}; this file holds the real value.
+keycloak/ecom-realm.json
 scripts/.dev-logs/
 scripts/.dev-pids/
 pom.xml.tag

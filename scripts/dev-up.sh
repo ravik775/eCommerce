@@ -116,6 +116,11 @@ ensure_container ecommerce-rabbitmq-dev \
   -e RABBITMQ_DEFAULT_PASS="${RABBITMQ_PASSWORD:-changeme-rabbitmq-dev}" \
   rabbitmq:3.13-management-alpine
 
+# Renders keycloak/ecom-realm.json (gitignored) from its committed
+# .template before Keycloak reads it — see render-realm-config.sh for
+# why this runs host-side rather than inside the Keycloak container.
+"${ROOT_DIR}/scripts/render-realm-config.sh"
+
 ensure_container ecommerce-keycloak-dev \
   -p 8090:8080 \
   -e KEYCLOAK_ADMIN=admin \

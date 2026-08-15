@@ -12,18 +12,19 @@
 - `docker-compose.yml`, `scripts/dev-up.sh`, `config-server/src/main/resources/config-repo/*.yml`: the same previously-hardcoded Postgres password (duplicated across 9 files) replaced with env-var placeholders and non-production `changeme-*` defaults.
 - `.env.example` (checked in) documents the Compose-side variables; `.env` (gitignored) holds the real local values.
 
-## Known residual gap: `keycloak/ecom-realm.json`
+## `keycloak/ecom-realm.json`'s client secret — resolved
 
-A second plaintext secret was found during a broader scan (not just the Postgres password): the gateway's Keycloak OAuth2 client secret (`gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT`), duplicated in `config-server/config-repo/api-gateway.yml` (fixed — templated the same way as Postgres) and `keycloak/ecom-realm.json` (**not fixed** — deliberately).
+A second plaintext secret was found during a broader scan (not just the Postgres password): the gateway's Keycloak OAuth2 client secret (`gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT`), duplicated in `config-server/config-repo/api-gateway.yml` and `keycloak/ecom-realm.json`.
 
-`ecom-realm.json` is Keycloak's own realm-import bootstrap file: plain JSON, read directly by the Keycloak container on first startup, with no environment-variable templating support built in. The already-running Keycloak instance (shared by both the Compose and K8s paths — see Phase 6a's local-dev deviation note) imported this exact value the first time it started; changing the file now without also re-importing would just create a silent mismatch between what's committed and what's actually configured, breaking OAuth2 login for both environments rather than fixing anything.
+`ecom-realm.json` is Keycloak's own realm-import bootstrap file — plain JSON, read directly by the Keycloak container on startup, with no environment-variable templating support of its own. Checked directly: `envsubst` is **not** available inside `quay.io/keycloak/keycloak:26.0` (no `gettext` package), so an in-container entrypoint wrapper isn't viable. It *is* available on this host and on GitHub Actions' `ubuntu-latest` runners, so the substitution now happens before the container starts, not inside it:
 
-Given that risk, this pass left `ecom-realm.json`'s value as-is and instead:
-- Templated `config-server/config-repo/api-gateway.yml`'s copy (the one path that *is* safely changeable — K8s never reads it, going straight to `k8s/base/secrets.yaml`'s already-sealed copy instead).
-- Set `docker-compose.yml`'s `config-server` default to the *real* current value (not a fake placeholder, unlike every other credential here) so Compose keeps working without requiring a `.env` override.
-- Documented the value in `.env.example` with an explicit warning not to change it without also updating and re-importing `ecom-realm.json`.
+- `keycloak/ecom-realm.json.template` (committed) holds `${KEYCLOAK_GATEWAY_CLIENT_SECRET}` in place of the literal value.
+- `keycloak/ecom-realm.json` (gitignored, the file Keycloak actually imports) is generated from the template — never committed again.
+- **Compose path**: a one-shot `keycloak-render-realm` service (plain `alpine` + `gettext`, `envsubst`) renders it, gated via `depends_on: condition: service_completed_successfully` on the real `keycloak` service — `docker compose up` alone does the right thing, no manual step to forget.
+- **`scripts/dev-up.sh` path**: calls `scripts/render-realm-config.sh` (the same `envsubst` substitution, host-side) before starting the Keycloak container.
+- `config-server/config-repo/api-gateway.yml`'s copy of the same secret was templated the same way as the Postgres password (K8s never reads this file — it reads the secret directly from `k8s/base/secrets.yaml`'s already-sealed copy instead, so this was always safely changeable).
 
-**The actual industry-standard fix**, not done here: an `envsubst`-based (or Keycloak's own `KC_SPI_*` env-var override mechanism) preprocessing step in the Keycloak container's entrypoint, templating `ecom-realm.json` before import the same way `config-server` already templates its own YAML — turning this from "can't be templated" into "isn't templated yet." Left as a flagged follow-up rather than risking breaking live authentication to half-solve it in this pass.
+**Live-verified 2026-08-15**, both paths, not just written: ran `docker compose run --rm keycloak-render-realm` and separately `scripts/render-realm-config.sh`, confirmed both produced `keycloak/ecom-realm.json` with the real value correctly substituted, byte-identical to what was previously hardcoded (so the already-running Keycloak instance, which imported this value once already, stays consistent — no re-import needed, nothing broke).
 
 ## Scope: strict
 
@@ -45,12 +46,19 @@ Two distinct questions, deliberately kept separate:
 Only the `sealed-secrets-controller` — it alone holds the private key. This isn't an RBAC policy choice, it's inherent to the architecture: no human or service account "decrypts" anything directly, ever.
 
 **2. Who can create/update `SealedSecret` objects, and who can read the resulting decrypted `Secret` objects?**
-This *is* an RBAC policy choice, and as of this pass it's deliberately **not yet formalized** — the namespace currently has no `Role`/`RoleBinding` granting either beyond cluster-admin (confirmed live: `kubectl auth can-i get secrets -n ecom --as=system:serviceaccount:ecom:default` → `no`). Two models were considered:
+Resolved: **separation of duties**, implemented in `k8s/base/rbac-secrets-publisher.yaml`. A `secrets-publisher` ServiceAccount/Role/RoleBinding can create/update/get/list `SealedSecret` resources (rotate a credential) but has **no `secrets` verb grant at all** — publishing a new encrypted value doesn't require ever being able to read another service's already-decrypted one. Viewing decrypted `Secret` values stays cluster-admin-only, unchanged.
 
-- **Separation of duties** (recommended for a SOC2-aligned Phase 7): a `secrets-publisher` Role that can create/update `SealedSecret` resources (rotate a credential) but has no `secrets` verb at all — publishing a new encrypted value doesn't require ever seeing another service's decrypted one. Viewing decrypted values stays cluster-admin-only.
-- **Admin-only, no new role**: leave the current de-facto state as the explicit policy. Simpler, but doesn't let a CI pipeline or a non-admin teammate rotate a credential without full cluster-admin access.
+**Live-verified 2026-08-15**:
+```
+$ kubectl auth can-i create sealedsecrets.bitnami.com -n ecom --as=system:serviceaccount:ecom:secrets-publisher
+yes
+$ kubectl auth can-i get secrets -n ecom --as=system:serviceaccount:ecom:secrets-publisher
+no
+$ kubectl auth can-i list secrets -n ecom --as=system:serviceaccount:ecom:secrets-publisher
+no
+```
 
-Not implemented in this pass pending that decision — revisit before treating this as fully closed.
+Nothing is bound to this ServiceAccount's token by default beyond the RBAC grant itself — wire a real operator or CI pipeline identity to it as needed (e.g. a GitHub Actions runner using a kubeconfig scoped to this ServiceAccount's token). Human operators doing anything beyond rotating a credential still use their own cluster-admin identity.
 
 ## Master key backup and disaster recovery
 
@@ -133,5 +141,8 @@ If any of the original plaintext values are *also* lost (not just the sealing ke
 
 ## Related
 - `k8s/base/secrets.yaml` — the sealed manifests themselves
+- `k8s/base/rbac-secrets-publisher.yaml` — the separation-of-duties RBAC
+- `keycloak/ecom-realm.json.template` / `scripts/render-realm-config.sh` — the realm-secret templating
+- `.gitleaks.toml` / `.github/workflows/ci.yml`'s `secret-scan` job — the CI gate that would have caught the original plaintext-secret gap this doc closes
 - `doc/architecture/07-migration-planning.md` — Phase 7's original "secrets migrated out of plaintext config" DoD item, closed by this doc
 - `doc/adr/ADR-0002-zero-trust-spire-app-level.md` — the separate cert-based (not secret-based) identity mechanism for service-to-service mTLS; unaffected by this change, covers a different problem

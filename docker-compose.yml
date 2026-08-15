@@ -76,9 +76,28 @@ services:
       timeout: 5s
       retries: 20
 
+  # One-shot: renders keycloak/ecom-realm.json.template (committed, has
+  # ${KEYCLOAK_GATEWAY_CLIENT_SECRET}) into keycloak/ecom-realm.json
+  # (gitignored, the file Keycloak actually imports) via envsubst.
+  # Compose-native, not a manual pre-step to remember: `docker compose up`
+  # alone renders it correctly. envsubst isn't available inside the
+  # Keycloak image itself (checked directly — no gettext package there),
+  # so this uses a plain alpine + gettext instead, same reasoning as
+  # scripts/render-realm-config.sh (which covers the scripts/dev-up.sh
+  # path, where this same rendering is done host-side instead).
+  keycloak-render-realm:
+    image: alpine:3.20
+    entrypoint: ["sh", "-c", "apk add --no-cache gettext >/dev/null && envsubst '$${KEYCLOAK_GATEWAY_CLIENT_SECRET}' < /keycloak/ecom-realm.json.template > /keycloak/ecom-realm.json"]
+    environment:
+      KEYCLOAK_GATEWAY_CLIENT_SECRET: ${KEYCLOAK_GATEWAY_CLIENT_SECRET:-gateway-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}
+    volumes:
+      - ./keycloak:/keycloak
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     command: start-dev --import-realm
+    depends_on:
+      keycloak-render-realm: { condition: service_completed_successfully }
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
