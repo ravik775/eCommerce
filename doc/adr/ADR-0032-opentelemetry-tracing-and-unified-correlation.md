@@ -78,3 +78,7 @@ Four related gaps, found via a structured audit against a new requirement ("same
 
 - Amends/closes the follow-up in ADR-0023 (Correlation ID and Trace ID): "align X-Trace-Id with the OTel-generated trace ID" is now implemented rather than deferred.
 - `common-lib/src/main/java/org/bgm/common/correlation/OrderCorrelationScope.java`, `k8s/base/loki.yaml` (Tempo will follow the same Deployment pattern), `ui/src/index.html`/`app.js` (Settings UI).
+
+## 2026-08-16 17:05 IST update — Settings toggle label rename
+
+Cosmetic only, recorded per this project's standing "every change gets an ADR-tracked decision" discipline. The `forceVerboseTracing` Settings toggle's label (`ui/src/index.html`) was changed from "Force detailed tracing" to "Detail Tracking" at explicit request, for a cleaner, less jargon-y label in the user menu. No behavior change — same checkbox id (`force-trace-toggle`), same `X-Force-Trace` header, same `CAN_TRACE`-gated visibility (see ADR-0048 for the server-side enforcement of that gate). Landed in the same commit as ADR-0048's audit-logging amendment.
