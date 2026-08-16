@@ -51,23 +51,26 @@ data:
               predicates:
                 - Path=/order/**
               filters:
-                # ADR-0051: GET-only, same safety rule as the
-                # catalog-service-read route below — a POST/PUT/DELETE
-                # under this path (cancel/return) must never be silently
-                # replayed, but a GET lookup is idempotent and safe to
-                # retry once. Covers the "certificate_expired"/handshake
-                # class of transient SPIFFE rotation failure this ADR
-                # investigates — RetryGatewayFilterFactory's default
-                # `exceptions` list already includes java.io.IOException,
-                # which javax.net.ssl.SSLHandshakeException is a subtype
-                # of, so no extra `exceptions:` override is needed here.
-                - name: Retry
-                  args:
-                    retries: 1
-                    series: [SERVER_ERROR]
-                    methods: [GET]
-                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
-                # RewritePath, not StripPrefix=1: OrderController is
+                # ADR-0051 (2026-08-16 correction, see that ADR's update):
+                # a Retry filter was added here targeting the same
+                # "certificate_expired"/handshake class of transient
+                # SPIFFE rotation failure the rest of that ADR addresses —
+                # removed again the same day after it caused a real,
+                # live-reproduced crash. This route's CircuitBreaker
+                # filter (below) unconditionally intercepts every
+                # downstream failure and converts it into its own
+                # controlled 503 fallback (OrderServiceFallback) before
+                # any raw exception/502/504 could ever reach a Retry
+                # filter positioned around it — so Retry here could only
+                # ever see, and wrongly re-trigger a second pass on,
+                # CircuitBreaker's OWN fallback response: found live as
+                # "ServerHttpResponse already committed (503)" on
+                # GET /order/customer/4. CircuitBreaker already owns
+                # resilience for this specific route; loosening its
+                # minimumNumberOfCalls (see resilience4j config below) is
+                # the correct lever for reducing false-positive trips on
+                # a single transient blip, not a Retry filter layered on
+                # top of it. RewritePath, not StripPrefix=1: OrderController is
                 # mapped at /orders (plural) on order-service, not root
                 # — StripPrefix=1 would forward "/order" -> "" (root) and
                 # "/order/5" -> "/5", neither of which OrderController
@@ -271,7 +274,19 @@ data:
         instances:
           orderCircuit:
             slidingWindowType: COUNT_BASED
-            slidingWindowSize: 2
-            minimumNumberOfCalls: 2
+            # ADR-0051 (2026-08-16 correction): was 2/2 — a single failed
+            # call out of a 2-call window is a 50% failure rate, so any
+            # one transient blip (the SPIFFE rotation class of failure
+            # this ADR investigates, among others) tripped the breaker
+            # for the full 30s open-state window, serving every checkout
+            # attempt a 503 fallback even though order-service itself
+            # was healthy again immediately after. 6/6 requires a real,
+            # sustained failure pattern (3+ of the last 6 calls) before
+            # opening, while still catching genuine outages well within
+            # this system's actual traffic volume (ADR-0036's capacity
+            # planning: 20 active users, nowhere near enough concurrent
+            # checkout traffic for 6 calls to take long to accumulate).
+            slidingWindowSize: 6
+            minimumNumberOfCalls: 6
             failureRateThreshold: 50
             waitDurationInOpenState: 30s

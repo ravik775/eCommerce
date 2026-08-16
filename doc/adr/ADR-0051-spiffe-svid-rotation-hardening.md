@@ -47,3 +47,26 @@ Three complementary changes, layered rather than relying on any single one:
 ## Related
 
 - Related: ADR-0002 (original SPIFFE mTLS decision — this ADR hardens its rotation robustness, doesn't change its design), ADR-0009 (Redis-backed rate limiter — the same gateway-routes ConfigMap this ADR also touches), ADR-0048 (the "surface a gap before it's found by someone else" pattern this ADR's expiry-margin warning follows)
+
+## 2026-08-16 22:40 IST update — the order-service Retry filter was wrong, removed; circuit breaker widened instead
+
+Reported live, same day as the original decision above: `Checkout failed: POST /order -> 503 (ref: ...)`, and separately, a real crash on `GET /order/customer/4` — gateway logs showed `Error [java.lang.UnsupportedOperationException] ... but ServerHttpResponse already committed (503 SERVICE_UNAVAILABLE)`, the identical failure signature ADR-0049's incident update already diagnosed once this session (a filter re-invoking the downstream chain on an exchange whose response a prior pass had already committed).
+
+Root cause this time: the `order-service` route carries **both** the `Retry` filter added by this ADR's original decision **and** a pre-existing `CircuitBreaker` filter (`orderCircuit`, forwarding to `OrderServiceFallback` on trip). Declaration order in this route's `filters:` list is also wrapping order — `Retry` (declared first) wraps `CircuitBreaker` (declared later), so `CircuitBreaker` runs *inside* `Retry`. `CircuitBreaker` unconditionally intercepts every downstream failure (a real exception, a timeout, the exact SPIFFE handshake failure class this ADR targets) and converts it into its own controlled `503` fallback response *before* any raw exception or `502`/`504` status could ever propagate out to `Retry`. So on this specific route, `Retry`'s status-matching logic could only ever observe `CircuitBreaker`'s own intentional fallback response — and since `503`/`SERVICE_UNAVAILABLE` was in `Retry`'s configured `statuses` list, it retried the *entire* wrapped chain (including `CircuitBreaker` again) against an exchange whose response the first pass had already committed. `Retry` on this route was never providing the resilience benefit the original decision intended; it could only misfire.
+
+The separately-reported checkout `POST /order -> 503` was not this bug — `order-service-create` (the actual create route) never had a `Retry` filter (excluded from the start as non-idempotent-unsafe). That 503 was `CircuitBreaker`'s fallback correctly doing its job after a real `order-service` call failure — but investigating *why* it tripped surfaced a second, independent problem: `orderCircuit`'s original config (`slidingWindowSize: 2, minimumNumberOfCalls: 2, failureRateThreshold: 50`) opens on a **single** failed call out of two — meaning any one-off transient blip (the still-not-fully-eliminated SPIFFE rotation class of failure, or any other momentary hiccup) serves a `503` to every checkout attempt for the full `30s waitDurationInOpenState`, even though `order-service` itself may already be healthy again.
+
+### Decision (correction)
+
+- **Removed** the `Retry` filter from the `order-service` route entirely (`k8s/base/configmap-gateway-routes.yaml`) — `CircuitBreaker` already owns resilience for this route by design; a `Retry` wrapped around it is structurally unable to help and only introduces the double-commit crash. The `user-service` and `inventory-service` routes' `Retry` filters (added in this ADR's original decision) are unaffected and remain correct — neither of those routes has a `CircuitBreaker` intercepting first, so `Retry` there genuinely sees real `502`/`503`/`504`/`IOException` outcomes from a failed hop, not an already-committed intentional fallback.
+- **Widened `orderCircuit`'s sensitivity**: `slidingWindowSize`/`minimumNumberOfCalls` raised from `2` to `6` (same `failureRateThreshold: 50`, so 3+ of the last 6 calls must fail before opening, not 1 of 2). This is the correct lever for reducing false-positive trips from a single transient blip — tuning the breaker itself, not layering an incompatible Retry filter around it.
+
+### Regression guard
+
+Functional verification (same reasoning as this ADR's original regression-guard section — `CircuitBreaker`/`Retry` interaction is reactive gateway-filter-chain wiring, verified live rather than unit-tested in isolation): confirm `GET /order/customer/*` no longer crashes during a live-simulated `order-service` failure window, and confirm a single transient failure no longer flips `orderCircuit` open (requires 3+ of 6 calls failing).
+
+### Consequences (update)
+
+- Positive: closes a real, live-reproduced crash this same day's earlier decision introduced, and separately reduces false-positive circuit-breaker trips that were degrading checkout availability beyond what actual backend health justified.
+- Negative / accepted trade-off: `orderCircuit` now takes slightly longer (up to 6 calls instead of 2) to detect a genuine, sustained `order-service` outage — an acceptable trade at this system's traffic volume (ADR-0036: 20 active users), where 6 calls accumulate quickly regardless.
+- Follow-up required: none currently open.
