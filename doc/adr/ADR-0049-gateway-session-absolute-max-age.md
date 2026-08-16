@@ -36,7 +36,44 @@ The surrounding reactive/session-invalidation wiring (`filter(...)`, `forceReaut
 
 - Positive: bounds a real, reported staleness gap to a fixed, configurable window without new infrastructure, reusing an authentication pattern already proven live elsewhere in this codebase. The unit tests also caught a real `instanceof` bug (see Regression guard) before it reached a live environment.
 - Negative / accepted trade-off: an active user is silently redirected (imperceptible in the common case where Keycloak's SSO session is still valid) every `security.session.max-age`; if the Keycloak SSO session itself has expired in that window, the user sees a real login prompt instead of a silent round-trip — an acceptable, rare edge case.
-- Follow-up required: live end-to-end verification (see Regression guard) once redeployed.
+- Follow-up required: none — see the 2026-08-16 19:53 IST incident update below; the fix that shipped is now covered by tests exercising `filter(...)` itself, not just `isStale(...)`.
+
+## 2026-08-16 19:53 IST update — production incident: filter ran chain.filter() twice on every route
+
+Reported live within the same deployment window: `http://localhost:8080/user/me` failed with `ERR_INCOMPLETE_CHUNKED_ENCODING` in the browser. Investigation found the breakage was not scoped to `/user/me` — every route through the gateway was affected, including static UI assets (`/app.js`, `/style.css`, `/favicon.ico`), evidenced by a flood of gateway log lines: `Error [java.lang.UnsupportedOperationException] for HTTP GET "<path>", but ServerHttpResponse already committed (200 OK)`, immediately followed by `Error finishing response. Closing connection` — the exact server-side signature of a truncated chunked response.
+
+Root cause: the original `filter(...)` implementation was
+
+```java
+return ReactiveSecurityContextHolder.getContext()
+        .map(SecurityContext::getAuthentication)
+        .flatMap(authentication -> isStale(authentication) ? forceReauth(exchange) : chain.filter(exchange))
+        .switchIfEmpty(Mono.defer(() -> chain.filter(exchange)));
+```
+
+`chain.filter(exchange)` returns `Mono<Void>`, which by definition never emits a value — it only signals completion or error. That makes its successful completion *indistinguishable* to `switchIfEmpty` from the upstream `ReactiveSecurityContextHolder.getContext()` Mono having been genuinely empty. Every single request that reached the non-stale branch therefore had `chain.filter(exchange)` invoked a **second time** by `switchIfEmpty`, on an exchange whose response the first invocation had already started (and often fully committed) writing to — triggering `ReadOnlyHttpHeaders.set(...)` failures deep in `CorrelationTraceGatewayFilter` (an unrelated, pre-existing filter that merely happened to be the first thing downstream to touch response headers on the doomed second pass) and leaving the connection closed mid-response.
+
+This is why the automated tests didn't catch it: `SessionMaxAgeGatewayFilterTest` originally only unit-tested `isStale(Authentication)` directly, never `filter(...)` itself, so the reactive-composition bug in the surrounding wiring had no test surface at all.
+
+### Fix
+
+Replaced the `map`/`flatMap`/`switchIfEmpty` chain with a single `flatMap` over an `Optional<Authentication>`, so "no security context" and "chain.filter() completed" can never be conflated:
+
+```java
+return ReactiveSecurityContextHolder.getContext()
+        .map(SecurityContext::getAuthentication)
+        .map(Optional::ofNullable)
+        .defaultIfEmpty(Optional.empty())
+        .flatMap(authentication -> isStale(authentication.orElse(null)) ? forceReauth(exchange) : chain.filter(exchange));
+```
+
+Added two new tests to `SessionMaxAgeGatewayFilterTest` that exercise `filter(...)` end-to-end against a `MockServerWebExchange` and a counting `GatewayFilterChain`, asserting `chain.filter(exchange)` runs **exactly once** — for both an authenticated non-stale session (`chainIsInvokedExactlyOnceForNonStaleSession`) and a request with no security context at all (`chainIsInvokedOnceWhenNoSecurityContextPresent`, e.g. a permitted actuator path). These would have caught the original bug directly.
+
+### Consequences (update)
+
+- Positive: the regression is fixed and now has direct test coverage of the exact composition bug that caused it, closing the gap the original regression-guard section left open (it only tested `isStale`, not the surrounding `Mono` wiring).
+- Negative / accepted trade-off: none — this is a pure bugfix restoring the intended one-invocation-per-request behavior.
+- Follow-up required: none currently open. Lesson generalized: any `GlobalFilter`/`WebFilter` composing `Mono<Void>`-returning calls (like `chain.filter(...)`) must not rely on `switchIfEmpty`/emptiness checks downstream of that call to distinguish outcomes — `Mono<Void>` success and "was empty" are the same signal.
 
 ## Related
 

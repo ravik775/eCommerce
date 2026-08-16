@@ -16,6 +16,7 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * ADR-0049 (doc/adr/ADR-0049-gateway-session-absolute-max-age.md): closes
@@ -49,14 +50,25 @@ public class SessionMaxAgeGatewayFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // Found live (broke every route, not just authenticated ones —
+        // see ADR-0049's incident note): chain.filter(exchange) returns
+        // Mono<Void>, which always completes with no emitted value.
+        // switchIfEmpty can't distinguish that from "the upstream
+        // SecurityContext Mono was genuinely empty" — so with the
+        // previous map/flatMap/switchIfEmpty shape, switchIfEmpty fired
+        // AGAIN after every successful chain.filter() completion,
+        // invoking the downstream chain a second time on an
+        // already-committed exchange. Wrapping in Optional and using a
+        // single flatMap avoids the ambiguity entirely: this Mono<Optional<...>>
+        // only ever completes empty if the security-context Mono itself
+        // was empty, never as a side effect of what flatMap does next.
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
-                .flatMap(authentication -> isStale(authentication)
+                .map(Optional::ofNullable)
+                .defaultIfEmpty(Optional.empty())
+                .flatMap(authentication -> isStale(authentication.orElse(null))
                         ? forceReauth(exchange)
-                        : chain.filter(exchange))
-                // No security context (e.g. the permitted actuator paths) —
-                // nothing to bound, proceed normally.
-                .switchIfEmpty(Mono.defer(() -> chain.filter(exchange)));
+                        : chain.filter(exchange));
     }
 
     // Package-private (not private): unit-tested directly in
