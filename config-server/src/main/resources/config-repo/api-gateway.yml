@@ -146,6 +146,13 @@ spring:
             jwk-set-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/certs
             user-info-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/userinfo
             user-name-attribute: sub
+
+# ADR-0005/SecurityConfig's manual RP-initiated logout handler: same
+# browser-reachable-host reasoning as provider.keycloak.authorization-uri
+# above (not container-internal host.docker.internal) — the browser is
+# what gets redirected here, not the gateway itself.
+keycloak:
+  logout-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/logout
             # RESOLVED (was "KNOWN OPEN ISSUE" — see git history for the
             # full debugging trail if curious): the earlier failures here
             # ("missing_user_name_attribute", then

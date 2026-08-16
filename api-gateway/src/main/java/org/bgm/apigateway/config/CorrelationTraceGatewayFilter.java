@@ -1,6 +1,11 @@
 package org.bgm.apigateway.config;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.propagation.TextMapSetter;
 import org.bgm.common.correlation.CorrelationConstants;
+import org.bgm.common.tracing.ErrorAlwaysSampledSpanExporter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -26,6 +31,29 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(CorrelationTraceGatewayFilter.class);
 
+    // Found live: a checkout request's OTel trace ID on the gateway's own
+    // span (e.g. "006d2268...") never matched order-service's span for
+    // the SAME request (e.g. "7b5b4cb3...") — proof the distributed trace
+    // tree was never actually one tree, just two independently-rooted
+    // ones per hop. Root cause: this filter previously ran at
+    // Ordered.HIGHEST_PRECEDENCE, before WebFlux's own HTTP-server
+    // observation instrumentation had created this request's span —
+    // Span.current()/Context.current() saw a no-op span at that point
+    // (same bug shape as ForceTraceFilter's original ordering mistake on
+    // the servlet side), AND, independent of that, nothing was ever
+    // injecting a W3C traceparent header onto the proxied outbound
+    // request — Spring Cloud Gateway's NettyRoutingFilter does not do
+    // this automatically for a raw reactor-netty routing call the way
+    // WebClient-based calls get instrumented. Injecting it explicitly
+    // here, and moving this filter's order late (see getOrder()) so the
+    // injected context is the real one, fixes both.
+    private static final TextMapSetter<ServerHttpRequest.Builder> TRACEPARENT_SETTER =
+            (carrier, key, value) -> {
+                if (carrier != null) {
+                    carrier.header(key, value);
+                }
+            };
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
@@ -35,10 +63,33 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         String traceId = firstNonBlank(
                 request.getHeaders().getFirst(CorrelationConstants.TRACE_ID_HEADER));
 
-        ServerHttpRequest mutatedRequest = request.mutate()
+        ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)
-                .header(CorrelationConstants.TRACE_ID_HEADER, traceId)
-                .build();
+                .header(CorrelationConstants.TRACE_ID_HEADER, traceId);
+
+        // ADR-0032 (CAN_TRACE Settings toggle): stamps the gateway's own
+        // span for this request — the header itself is forwarded
+        // downstream unchanged (Spring Cloud Gateway proxies incoming
+        // headers by default), so each backend's own ForceTraceFilter
+        // (common-lib) does the same stamp on its own span. See
+        // ForceTraceFilter's Javadoc for why this is a direct header
+        // check rather than OTel baggage propagation.
+        if ("true".equalsIgnoreCase(request.getHeaders().getFirst("X-Force-Trace"))) {
+            Span.current().setAttribute(ErrorAlwaysSampledSpanExporter.FORCE_TRACE_ATTRIBUTE, true);
+        }
+
+        // Links the backend's span to the gateway's span as its real
+        // parent — this is what actually makes Tempo present one tree
+        // across services instead of a separate root per hop. Static
+        // W3CTraceContextPropagator, not a Spring-registered
+        // ContextPropagators bean: Spring Boot's OTel autoconfiguration
+        // doesn't reliably expose one as an injectable bean across
+        // versions, and the W3C format is standard regardless of how the
+        // SDK is wired — every backend's own Micrometer/OTel HTTP-server
+        // instrumentation already extracts "traceparent" automatically.
+        W3CTraceContextPropagator.getInstance().inject(Context.current(), requestBuilder, TRACEPARENT_SETTER);
+
+        ServerHttpRequest mutatedRequest = requestBuilder.build();
 
         // Set on the response up front so both headers are present even if
         // a downstream call fails or the gateway itself errors out.
@@ -84,7 +135,16 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
     @Override
     public int getOrder() {
-        return Ordered.HIGHEST_PRECEDENCE;
+        // Deliberately LATE (see the TRACEPARENT_SETTER Javadoc above for
+        // why): Spring Cloud Gateway's NettyRoutingFilter — the filter
+        // that actually issues the proxied call — runs at
+        // Ordered.LOWEST_PRECEDENCE, so running one step ahead of it
+        // guarantees this filter executes after WebFlux's own span has
+        // been created (Span.current()/Context.current() are valid) while
+        // still mutating the exchange in time for NettyRoutingFilter to
+        // see the injected traceparent header and the correlation/trace
+        // ID headers on its outbound call.
+        return Ordered.LOWEST_PRECEDENCE - 1;
     }
 
     private static String firstNonBlank(String headerValue) {

@@ -9,7 +9,24 @@
 <body>
   <header>
     <h1>eCommerce</h1>
-    <div id="whoami">Loading…</div>
+    <div id="user-menu">
+      <div id="user-menu-identity">
+        <span id="whoami">Loading…</span>
+        <select id="roles-dropdown" hidden></select>
+      </div>
+      <!-- ADR-0032: only shown at all for a session with CAN_TRACE —
+           hidden, not just disabled, same client-side-convenience
+           pattern as the role-gated tabs (real enforcement is the
+           header ForceTraceFilter/CorrelationTraceGatewayFilter check
+           on the backend). -->
+      <button id="settings-btn" hidden>⚙ Settings</button>
+      <div id="settings-panel" hidden>
+        <label>
+          <input type="checkbox" id="force-trace-toggle" />
+          Force detailed tracing
+        </label>
+      </div>
+    </div>
   </header>
 
   <!-- Role-based tabs (not flat): "Shop" is every authenticated user's

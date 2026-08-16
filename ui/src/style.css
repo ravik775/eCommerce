@@ -10,7 +10,41 @@ header {
   color: white;
 }
 header h1 { margin: 0; font-size: 1.3rem; font-weight: 600; letter-spacing: .02em; }
+
+#user-menu { position: relative; display: flex; align-items: center; gap: .75rem; }
+#user-menu-identity { display: flex; flex-direction: column; align-items: flex-start; gap: .2rem; }
 #whoami { font-size: .9rem; opacity: .85; }
+#roles-dropdown {
+  font-size: .75rem;
+  background: rgba(255,255,255,.1);
+  color: white;
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 4px;
+  padding: .1rem .3rem;
+}
+#roles-dropdown option { color: #1a1a1a; }
+#settings-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.3);
+  color: white;
+  font-size: .8rem;
+  padding: .3rem .6rem;
+}
+#settings-btn:hover { background: rgba(255,255,255,.1); }
+#settings-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: .5rem;
+  background: white;
+  color: #1a1a1a;
+  padding: .75rem 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  font-size: .85rem;
+  white-space: nowrap;
+  z-index: 10;
+}
 
 nav#tabs {
   display: flex;

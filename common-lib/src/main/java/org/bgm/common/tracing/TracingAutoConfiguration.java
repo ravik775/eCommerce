@@ -22,6 +22,21 @@ import java.time.Duration;
  * common-config) fully disables this: a service that hasn't opted in
  * pays no tracing overhead at all. Enabled per-environment via the
  * {@code TRACING_ENABLED} env var once Tempo is confirmed reachable.
+ * <p>
+ * The servlet-only {@code ForceTraceFilter} registration deliberately
+ * lives in its own top-level class ({@link ForceTraceFilterAutoConfiguration}),
+ * not a method here gated by {@code @ConditionalOnWebApplication} —
+ * found live: Spring's configuration-class metadata introspection
+ * resolves every {@code @Bean} method's signature types (including
+ * return/parameter types) up front, regardless of whether that specific
+ * method's own condition will pass, so a method here returning
+ * {@code FilterRegistrationBean<ForceTraceFilter>} threw
+ * {@code NoClassDefFoundError: jakarta/servlet/Filter} on api-gateway
+ * (WebFlux, no servlet API on the classpath at all) even though the
+ * bean itself would never have been created there. A whole separate
+ * class, itself skipped by its own class-level condition, avoids
+ * Spring ever inspecting that method's signature on a classpath that
+ * can't resolve it.
  */
 @AutoConfiguration
 @ConditionalOnClass(SpanExporter.class)

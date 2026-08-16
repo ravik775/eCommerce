@@ -8,6 +8,7 @@
 
 const cart = []; // [{ productId, name, unitPrice, quantity }]
 let me = null;
+let forceTrace = false; // ADR-0032: CAN_TRACE-gated Settings toggle
 
 // ADR-0023: correlation ID and trace ID are distinct, with distinct
 // uniqueness guarantees. This UI is the true entry point for end-to-end
@@ -30,6 +31,10 @@ function apiFetch(url, options = {}) {
       ...options.headers,
       'X-Correlation-Id': crypto.randomUUID(),
       'X-Trace-Id': TRACE_ID,
+      // ADR-0032: only sent when the CAN_TRACE-gated toggle is on —
+      // absent (not "false") otherwise, so a session without the role
+      // never even has the option to influence backend sampling.
+      ...(forceTrace ? { 'X-Force-Trace': 'true' } : {}),
     },
   });
 }
@@ -48,7 +53,10 @@ async function loadMe() {
   const res = await apiFetch('/user/me');
   if (!res.ok) throw new Error(`GET /user/me -> ${res.status}`);
   me = await res.json();
-  document.getElementById('whoami').textContent = `${me.name || me.email} (${me.roles.join(', ')})`;
+  document.getElementById('whoami').textContent = me.name || me.email;
+  const rolesDropdown = document.getElementById('roles-dropdown');
+  rolesDropdown.innerHTML = me.roles.map((r) => `<option value="${r}">${r}</option>`).join('');
+  rolesDropdown.hidden = false;
 
   // Role-gated tabs — hidden by default in index.html, unhidden here.
   // Client-side only, for UI convenience: the real enforcement is the
@@ -59,8 +67,15 @@ async function loadMe() {
     document.getElementById('tab-btn-provider').hidden = false;
     loadMyProducts();
   }
-  if (me.roles.includes('ADMIN')) {
+  // ADR-0033: INVENTORY_ADMIN (or PLATFORM_ADMIN, which carries it via
+  // Keycloak composite expansion) — not the old, now-inert ADMIN, which
+  // no longer grants any operational capability.
+  if (me.roles.includes('INVENTORY_ADMIN') || me.roles.includes('PLATFORM_ADMIN')) {
     document.getElementById('tab-btn-admin').hidden = false;
+  }
+  // ADR-0032: force-trace Settings toggle.
+  if (me.roles.includes('CAN_TRACE')) {
+    document.getElementById('settings-btn').hidden = false;
   }
   await loadMyOrders();
 }
@@ -305,6 +320,16 @@ document.getElementById('restock-form').addEventListener('submit', restock);
 for (const btn of document.querySelectorAll('.tab-btn')) {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 }
+
+// ADR-0032: click toggles the panel open/closed; the panel itself only
+// ever becomes reachable (settings-btn unhidden) for a CAN_TRACE session.
+document.getElementById('settings-btn').addEventListener('click', () => {
+  const panel = document.getElementById('settings-panel');
+  panel.hidden = !panel.hidden;
+});
+document.getElementById('force-trace-toggle').addEventListener('change', (e) => {
+  forceTrace = e.target.checked;
+});
 
 loadMe().then(() => loadProducts()).catch((err) => {
   document.getElementById('whoami').textContent = `Error: ${err.message}`;
