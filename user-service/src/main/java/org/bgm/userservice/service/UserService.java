@@ -70,14 +70,28 @@ public class UserService {
      * legacy row's key forward on first sight is simpler than a manual
      * data backfill and self-heals every account on its next login.
      */
+    // ADR-0050: previously only set `roles` in the create branch below —
+    // an existing user's roles were a snapshot frozen at whatever they
+    // were the first time this method ever ran for them, never synced
+    // again. Found live: a Google-JIT user granted CAN_TRACE in Keycloak
+    // well after their first login kept seeing only their original
+    // CUSTOMER role from /user/me indefinitely, on every subsequent call,
+    // regardless of how many times they re-authenticated — confirmed via
+    // the gateway's own LOGIN audit line showing ROLE_CAN_TRACE correctly
+    // present in the JWT while this method still returned the stale DB
+    // row. Keycloak is this system's source of truth for role
+    // assignment (this method's own `roles` parameter is read fresh from
+    // the JWT on every call already — see UserController#me) — every
+    // branch now writes it, not just the create path.
     @Transactional
     public User getOrCreateByKeycloakSubject(String keycloakSubjectId, String email, String name, Set<Role> roles) {
+        Set<Role> effectiveRoles = roles == null || roles.isEmpty() ? Set.of(Role.CUSTOMER) : roles;
         return userRepository.findByKeycloakSubjectId(keycloakSubjectId)
+                .map(existing -> syncRoles(existing, effectiveRoles))
                 .or(() -> userRepository.findByEmail(email).map(existing -> {
                     existing.setKeycloakSubjectId(keycloakSubjectId);
                     existing.setName(name);
-                    existing.setUpdatedAt(Instant.now());
-                    return userRepository.save(existing);
+                    return syncRoles(existing, effectiveRoles);
                 }))
                 .orElseGet(() -> {
                     User user = new User();
@@ -85,12 +99,20 @@ public class UserService {
                     user.setName(name);
                     user.setEmail(email);
                     user.setStatus(UserStatus.ACTIVE);
-                    user.setRoles(roles == null || roles.isEmpty() ? Set.of(Role.CUSTOMER) : roles);
+                    user.setRoles(effectiveRoles);
                     Instant now = Instant.now();
                     user.setCreatedAt(now);
                     user.setUpdatedAt(now);
                     return userRepository.save(user);
                 });
+    }
+
+    private User syncRoles(User user, Set<Role> currentRoles) {
+        if (!user.getRoles().equals(currentRoles)) {
+            user.setRoles(currentRoles);
+        }
+        user.setUpdatedAt(Instant.now());
+        return userRepository.save(user);
     }
 
     @Transactional
