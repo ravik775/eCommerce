@@ -1,0 +1,233 @@
+# Closes two 2026-08-16 architecture-review gaps together: ADR-0013
+# (WAF, decided but never implemented — no Ingress existed to attach it
+# to) and this session's "use Nginx as Ingress controller" instruction.
+# Own namespace (`ingress-nginx`), not `ecom`: sidesteps the `ecom`
+# namespace's ResourceQuota (already at ~76% of requests.memory before
+# this — `kubectl describe resourcequota ecom-quota -n ecom`, confirmed
+# live: 3904Mi/5Gi used) and its `restricted` Pod Security Standard
+# label, which the upstream ingress-nginx controller image doesn't
+# cleanly satisfy out of the box (needs an explicit port/capability
+# adjustment below to run non-root on unprivileged ports instead).
+#
+# Deliberately NOT the full upstream ingress-nginx manifest (which also
+# includes a ValidatingWebhookConfiguration, admission-webhook Job,
+# multiple ClusterRoles, etc.) — a hand-trimmed subset matching this
+# project's consistent "minimal infra for what's actually needed" bias
+# (ADR-0002/0013/0014/0015/0021/0022/0034). No ingress-class validation
+# webhook: acceptable for a single-controller, single-namespace,
+# non-multi-tenant local deployment.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingress-nginx
+  namespace: ingress-nginx
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-nginx
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "endpoints", "nodes", "pods", "secrets", "namespaces", "services"]
+    verbs: ["list", "watch", "get"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["list", "watch", "get"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses/status"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Found live: the trimmed RBAC above was missing both of these,
+  # causing real runtime failures (not cosmetic) — "Failed to watch
+  # EndpointSlice: forbidden" (the controller uses EndpointSlice, not
+  # just the legacy Endpoints API, to resolve backend pod IPs) and
+  # "leases.coordination.k8s.io ... forbidden" (single-replica leader
+  # election still acquires a Lease even with only one candidate).
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "watch", "get"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ingress-nginx
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ingress-nginx
+subjects:
+  - kind: ServiceAccount
+    name: ingress-nginx
+    namespace: ingress-nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: k8s.io/ingress-nginx
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+data:
+  # WAF (ADR-0013), finally implemented: enables ModSecurity bundled in
+  # the standard ingress-nginx controller image plus the OWASP Core Rule
+  # Set — no separate image/sidecar needed, just these two flags per
+  # upstream's own documented mechanism.
+  enable-modsecurity: "true"
+  enable-owasp-modsecurity-crs: "true"
+  # DetectionOnly, not blocking, to start: a WAF that's never been run
+  # against this application's real traffic shape risks false-positive
+  # blocking of legitimate requests (e.g. JSON payloads with characters
+  # CRS's generic SQLi/XSS rules sometimes flag) on day one. Matches
+  # this project's existing pattern for a newly-added-but-unproven gate
+  # (ADR-0010's DAST is advisory-only for the analogous reason). Flip to
+  # "On" once a burn-in period confirms no false positives against this
+  # app's actual traffic.
+  modsecurity-snippet: |
+    SecRuleEngine DetectionOnly
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ingress-nginx }
+  template:
+    metadata:
+      labels: { app: ingress-nginx }
+    spec:
+      serviceAccountName: ingress-nginx
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: controller
+          image: registry.k8s.io/ingress-nginx/controller:v1.13.0
+          args:
+            - /nginx-ingress-controller
+            - --election-id=ingress-nginx-leader
+            - --controller-class=k8s.io/ingress-nginx
+            - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
+            - --watch-namespace=ecom
+            # Unprivileged ports, not 80/443: privileged ports need
+            # NET_BIND_SERVICE, which "restricted" PSS's capabilities
+            # drop-ALL policy disallows re-adding. Traffic reaches these
+            # via the Service's port mapping below, not directly.
+            - --http-port=8080
+            - --https-port=8443
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: https, containerPort: 8443 }
+          resources:
+            # ~90Mi/90m is the commonly-cited ingress-nginx minimum
+            # footprint; doubled here for headroom since this pod also
+            # runs ModSecurity/CRS rule evaluation on every request,
+            # not just plain proxying.
+            requests: { cpu: 100m, memory: 180Mi }
+            limits: { cpu: 300m, memory: 360Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"], add: ["NET_BIND_SERVICE"] }
+            # NOT readOnlyRootFilesystem, unlike every backend Spring
+            # Boot service (ADR-0020) — found live, this is a real
+            # difference in the two workloads' architecture, not an
+            # oversight. nginx's dynamic reload model regenerates config
+            # in place across a spread of paths under /etc/nginx
+            # (compiled Lua state at /etc/nginx/lua/cfg.json, the
+            # default self-signed placeholder cert, its own /tmp/nginx
+            # runtime dir with a specific pre-existing structure the
+            # image provides at build time) — unlike the Spring Boot
+            # services' single, cleanly-isolatable /tmp need, safely
+            # emptyDir-mounting nginx's writable paths would mean either
+            # enumerating many of them (fragile — a version bump could
+            # add a new one) or mounting the whole /etc/nginx tree,
+            # which would blank out image-baked content the entrypoint
+            # doesn't necessarily regenerate. Confirmed via a real
+            # CrashLoopBackOff this session (`open /etc/nginx/lua/cfg.json:
+            # read-only file system`) before reverting this flag.
+            # runAsNonRoot + allowPrivilegeEscalation:false + capabilities
+            # drop-ALL (only NET_BIND_SERVICE re-added, for port 80/443)
+            # remain in force — three of "restricted" PSS's four
+            # container-level controls, not zero hardening.
+          readinessProbe:
+            httpGet: { path: /healthz, port: 10254 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 10254 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-nginx-controller
+  namespace: ingress-nginx
+spec:
+  # ClusterIP + port-forward, not LoadBalancer/NodePort: matches how
+  # every other externally-reached component in this local deployment
+  # is accessed (api-gateway itself, Prometheus, Grafana — all via
+  # `kubectl port-forward`), so this doesn't need a different access
+  # pattern than the rest of the stack already uses.
+  type: ClusterIP
+  selector: { app: ingress-nginx }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
+    - { name: https, port: 443, targetPort: 8443 }
+---
+# Routes through the WAF to the same api-gateway Service already used
+# directly elsewhere — this Ingress is additive (a new, optional path
+# in front of the gateway), not a replacement of the existing
+# port-forward-to-api-gateway access pattern other tooling in this repo
+# already relies on.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway
+  namespace: ecom
+  annotations:
+    nginx.ingress.kubernetes.io/enable-modsecurity: "true"
+    nginx.ingress.kubernetes.io/enable-owasp-core-rules: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port: { number: 8080 }

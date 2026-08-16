@@ -2,8 +2,9 @@
 # and doc/adr/ADR-0011-artifact-packaging-zip.md.
 #
 # Stages: build -> test -> SAST (CodeQL) -> SCA (OWASP Dependency-Check) ->
-# package (zip, ADR-0011) -> DAST (OWASP ZAP, advisory-only until Phase 4
-# per ADR-0010, since there are no real authenticated endpoints to scan yet).
+# image-scan (Trivy, ADR-0019) -> package (zip, ADR-0011) -> DAST (OWASP
+# ZAP, advisory-only until Phase 4 per ADR-0010, since there are no real
+# authenticated endpoints to scan yet).
 #
 # No stage pushes an artifact anywhere (no registry, no repository) — the
 # release zip is retained only as a workflow-run artifact. Pushing is a
@@ -150,10 +151,87 @@ jobs:
           path: target/dependency-check-report.*
           retention-days: 7
 
+  image-scan:
+    name: Image scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    strategy:
+      matrix:
+        # Every service with a Dockerfile as of Phase 5/6 — ADR-0019's
+        # own follow-up ("wire in Trivy once Dockerfiles exist") was
+        # never actually done despite the Dockerfiles landing; closing
+        # that gap here. config-server and service-discovery included
+        # for completeness even though they aren't part of the
+        # k8s/base runtime footprint reviewed elsewhere.
+        service:
+          - api-gateway
+          - catalog-service
+          - config-server
+          - inventory-service
+          - notification-service
+          - order-service
+          - payment-service
+          - service-discovery
+          - user-service
+          - ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+
+      - name: Build image
+        run: docker build -t "${{ matrix.service }}:${{ github.sha }}" -f "${{ matrix.service }}/Dockerfile" .
+
+      # Pinned to a full commit SHA, not a version tag like every other
+      # action in this file — deliberately inconsistent with this repo's
+      # usual tag-pinning convention. Evidence, not just general best
+      # practice: aquasecurity/trivy-action itself suffered a real
+      # supply-chain compromise in March 2026 (credential-stealer
+      # injected into every tag from 0.0.1 through 0.34.2 — see
+      # https://www.stepsecurity.io/blog/trivy-compromised-a-second-time---malicious-v0-69-4-release
+      # and https://thehackernews.com/2026/03/trivy-security-scanner-github-actions.html).
+      # A floating tag on exactly this action would have silently
+      # pulled the compromised version. SHA below is v0.36.0's verified
+      # commit (ed142fd, confirmed via GitHub's commit API,
+      # 2026-04-22) — the first release after the incident.
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "${{ matrix.service }}:${{ github.sha }}"
+          format: "sarif"
+          output: "trivy-${{ matrix.service }}.sarif"
+          # HIGH/CRITICAL only, matching ADR-0010's SCA gating policy
+          # (-DfailBuildOnCVSS=8) rather than failing on every LOW
+          # finding — calibrated to what's actually remediable, per
+          # current (2026) guidance on avoiding alert fatigue.
+          severity: "HIGH,CRITICAL"
+          # Ignores CVEs with no available fix yet (nothing to action on
+          # today) rather than blocking the pipeline on them — current
+          # (2026) Trivy CI guidance; tracked separately, not silently
+          # dropped, via the uploaded SARIF report below.
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload Trivy SARIF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ matrix.service }}-sarif
+          path: trivy-${{ matrix.service }}.sarif
+          retention-days: 14
+
   package:
     name: Package (release zip)
     runs-on: ubuntu-latest
-    needs: [sast, sca]
+    needs: [sast, sca, image-scan]
     steps:
       - uses: actions/checkout@v4
 

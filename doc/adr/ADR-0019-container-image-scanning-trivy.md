@@ -1,8 +1,10 @@
 # ADR-0019: Container image scanning — Trivy in CI (extends ADR-0010)
 
-**Status**: Accepted
+**Status**: Accepted — implemented 2026-08-16
 **Date**: 2026-08-13
 **Deciders**: Solution/Security Architect
+
+**2026-08-16 update**: the follow-up below ("wire in Trivy once Dockerfiles land") had gone stale — Dockerfiles existed for all 10 services but the CI stage was never actually added, found during an architecture review. Closed via a new `image-scan` job in `.github/workflows/ci.yml` (matrix over all 10 services' Dockerfiles), gated on HIGH/CRITICAL with `ignore-unfixed: true` to match ADR-0010's SCA policy. Pinned to `aquasecurity/trivy-action`'s full commit SHA rather than a version tag — the action itself suffered a real supply-chain compromise in March 2026 (credential-stealer injected into every tag 0.0.1–0.34.2), so a floating tag here specifically would have been actively dangerous, not just theoretically less safe.
 
 ## Context
 

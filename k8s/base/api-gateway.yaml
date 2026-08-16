@@ -62,9 +62,16 @@ spec:
             - name: gateway-routes
               mountPath: /config
             - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+            # ADR-0020 claimed "restricted" Pod Security Standard but
+            # never actually set this — closing that gap. Needs an
+            # explicit writable /tmp (above): the JVM's default
+            # java.io.tmpdir writes there; this service logs to
+            # stdout only, no file appender.
+            readOnlyRootFilesystem: true
           readinessProbe:
             tcpSocket: { port: 8080 }
             initialDelaySeconds: 100
@@ -76,6 +83,8 @@ spec:
       volumes:
         - name: gateway-routes
           configMap: { name: gateway-routes }
+        - name: tmp
+          emptyDir: {}
         - name: spiffe-workload-api
           csi:
             driver: csi.spiffe.io

@@ -1,8 +1,10 @@
 # ADR-0013: Edge WAF — ModSecurity + OWASP CRS via ingress-nginx (no standalone component)
 
-**Status**: Accepted
+**Status**: Accepted — implemented 2026-08-16
 **Date**: 2026-08-13
 **Deciders**: Solution/Security Architect
+
+**2026-08-16 update**: implemented via `k8s/base/ingress-nginx.yaml` — a hand-trimmed `ingress-nginx` controller deployment (own namespace, to avoid the `ecom` namespace's already-tight `ResourceQuota`), `enable-modsecurity`/`enable-owasp-modsecurity-crs` set exactly as this ADR's Decision specified, plus an `Ingress` routing to `api-gateway`. One addition beyond the original Decision: `SecRuleEngine DetectionOnly` (not blocking) to start — a WAF that's never seen this application's real traffic risks false-positive blocking on day one; flip to enforcing once a burn-in period confirms no false positives. Verified live: controller pod running, readiness passing.
 
 ## Context
 

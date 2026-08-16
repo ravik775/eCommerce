@@ -1,0 +1,99 @@
+# ADR-0022's explicit follow-up ("define the pg_dump CronJob's schedule
+# and retention when Phase 6 provisions Postgres") was never implemented
+# — closing that gap here. Deliberately a plain CronJob + PVC, not a
+# backup operator/Velero: same "don't add infrastructure before it's
+# needed" bias as ADR-0022 itself (and ADR-0002/0013/0014/0015/0021).
+#
+# This does NOT give point-in-time recovery (only nightly snapshots) or
+# off-cluster durability (the backup PVC lives on the same node/cluster
+# as the primary — a full node/cluster loss takes both out together).
+# Accepted for a 20-active-user internal system; see
+# doc/adr/ADR-0034-backup-and-replication-posture.md for the full
+# reasoning across Postgres/Kafka/Redis and when to revisit.
+#
+# Deliberately NOT added to k8s/base/kustomization.yaml's resources
+# list, same reason postgres.yaml itself isn't: this dev machine runs
+# Postgres as a standalone host container (see kustomization.yaml's
+# "LOCAL-DEV DEVIATION" note), not the in-cluster Service this CronJob
+# targets (PGHOST=postgres). Both files are the correct target-state
+# manifests for a real deployment — add both to the resources list
+# together when re-enabling in-cluster Postgres.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup
+  namespace: ecom
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: ecom
+spec:
+  # Daily at 02:00 — outside this system's stated usage pattern (20
+  # active internal users, business-hours use), so a multi-minute
+  # pg_dump lock/IO burst has no real users to disrupt.
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Retries handle a transient failure the same night; if all 2
+      # attempts fail, that night's backup is simply missing — visible
+      # via failedJobsHistoryLimit / any external job-failure alerting,
+      # not silently swallowed.
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              envFrom:
+                - secretRef: { name: postgres-secret }
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: PGPORT
+                  value: "5432"
+                # RETENTION_DAYS: kept short deliberately — this is a
+                # crash/accidental-delete safety net for a small system,
+                # not a compliance archive. Revisit alongside
+                # doc/adr/ADR-0034 if a longer retention requirement
+                # ever applies (e.g. SOC 2 evidence retention).
+                - name: RETENTION_DAYS
+                  value: "14"
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  STAMP=$(date +%Y%m%d-%H%M%S)
+                  FILE="/backup/ecommerce-${STAMP}.sql.gz"
+                  echo "Backing up $POSTGRES_DB to $FILE"
+                  pg_dump -h "$PGHOST" -p "$PGPORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges \
+                    | gzip > "$FILE"
+                  echo "Backup complete: $(du -h "$FILE" | cut -f1)"
+                  echo "Pruning backups older than ${RETENTION_DAYS} days"
+                  find /backup -name 'ecommerce-*.sql.gz' -mtime "+${RETENTION_DAYS}" -print -delete
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests: { cpu: 100m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 256Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+          volumes:
+            - name: backup
+              persistentVolumeClaim: { claimName: postgres-backup }

@@ -45,8 +45,16 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+            # ADR-0020 claimed "restricted" Pod Security Standard but
+            # never actually set this — closing that gap. Needs an
+            # explicit writable /tmp (below): Tomcat's embedded work
+            # dir and the JVM's default java.io.tmpdir both write
+            # there; Spring Boot itself writes no other files at
+            # runtime (stdout-only logging, no file appender).
+            readOnlyRootFilesystem: true
           volumeMounts:
             - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
           readinessProbe:
             tcpSocket: { port: 8081 }
             initialDelaySeconds: 100
@@ -56,6 +64,8 @@ spec:
             initialDelaySeconds: 220
             periodSeconds: 15
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: spiffe-workload-api
           csi:
             driver: csi.spiffe.io

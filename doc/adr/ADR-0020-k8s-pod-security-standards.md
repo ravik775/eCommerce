@@ -1,8 +1,10 @@
 # ADR-0020: Kubernetes workload security — Pod Security Standards "restricted" profile
 
-**Status**: Accepted
+**Status**: Accepted — `readOnlyRootFilesystem` closed 2026-08-16
 **Date**: 2026-08-13
 **Deciders**: Solution/Security Architect
+
+**2026-08-16 update**: an architecture review found this ADR's own Decision text ("uses a read-only root filesystem where the service doesn't need to write locally") had never actually been set on any of the 7 backend `Deployment` manifests — `runAsNonRoot`, `allowPrivilegeEscalation: false`, and `capabilities: drop: [ALL]` were all real, but `readOnlyRootFilesystem` was silently absent. Closed by adding `readOnlyRootFilesystem: true` plus a writable `emptyDir` mounted at `/tmp` (Tomcat's embedded work dir and the SPIFFE mTLS auto-config's SVID PEM files both need it — confirmed live: `payment-service`'s Tomcat writes `/tmp/spiffe-svid/{svid-key,svid,chain}.pem` at startup) to all 7 backend deployments (`k8s/base/{order,catalog,inventory,payment,notification,user}-service.yaml`, `api-gateway.yaml`). Verified live — all 7 restarted cleanly and passed readiness under the new constraint.
 
 ## Context
 

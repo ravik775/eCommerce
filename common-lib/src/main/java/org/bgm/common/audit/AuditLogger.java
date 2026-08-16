@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.Locale;
 
 /**
  * Phase 7 (SOC2 alignment): a queryable audit trail for a login→order→
@@ -35,18 +37,42 @@ public final class AuditLogger {
 
     private static final Logger AUDIT = LoggerFactory.getLogger("AUDIT");
 
+    // ADR-0037 (SOC 2 mapping): this class had no field-level guard at
+    // all — today's call sites happen to be clean (no email/card/token
+    // ever passed) purely because every caller was individually careful,
+    // not because anything here enforced it. A key-name denylist is a
+    // cheap, non-breaking defense-in-depth net: it redacts by KEY name
+    // only (not content-sniffing values, which would be slower and
+    // still imperfect), so it can't false-negative on a differently-
+    // shaped PII value, only under-catch a field named misleadingly —
+    // an accepted trade-off for a lightweight guard over no guard.
+    private static final Set<String> SENSITIVE_KEY_SUBSTRINGS = Set.of(
+            "email", "password", "passwd", "ssn", "card", "cvv", "cvc",
+            "secret", "token", "phone", "address", "dob", "birthdate");
+
     private AuditLogger() {
     }
 
     /**
      * @param event  short, stable event name (e.g. "LOGIN", "ORDER_CREATED", "PAYMENT_SUCCESS")
      * @param fields ordered key-value pairs describing the event; values are logged via
-     *               {@code String.valueOf}, so pass already-formatted/safe values
+     *               {@code String.valueOf}, so pass already-formatted/safe values.
+     *               Any key whose name matches a known-sensitive substring
+     *               (case-insensitive) has its value redacted regardless of
+     *               content — see {@link #SENSITIVE_KEY_SUBSTRINGS}.
      */
     public static void log(String event, Map<String, ?> fields) {
         StringBuilder line = new StringBuilder("auditEvent=").append(event);
-        fields.forEach((key, value) -> line.append(' ').append(key).append('=').append(value));
+        fields.forEach((key, value) -> {
+            Object safeValue = isSensitiveKey(key) ? "[REDACTED]" : value;
+            line.append(' ').append(key).append('=').append(safeValue);
+        });
         AUDIT.info(line.toString());
+    }
+
+    private static boolean isSensitiveKey(String key) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        return SENSITIVE_KEY_SUBSTRINGS.stream().anyMatch(lower::contains);
     }
 
     /** Convenience builder for the common case of a handful of fields, in call order. */

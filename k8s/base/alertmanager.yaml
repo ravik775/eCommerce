@@ -1,0 +1,205 @@
+# Closes "Prometheus/Grafana dashboards exist but nothing pages anyone —
+# pull-based observation only" from the 2026-08-16 architecture review.
+# Deliberately the smallest thing that makes an alert actually *push*
+# somewhere instead of only existing as a queryable metric: Alertmanager
+# routes every alert to a webhook, and a small sidecar in the same pod
+# appends the webhook payload to a file on a PVC — "logged to a file at
+# a predefined location, monitored manually" per the explicit decision,
+# not Slack/PagerDuty/email (no outbound integration exists to wire
+# those into yet, and none is needed for a 20-active-user internal tool
+# where a human can reasonably tail a file).
+#
+# hostPath was considered (would make the log directly visible on the
+# Windows host) and rejected: the `ecom` namespace enforces the
+# Kubernetes "restricted" Pod Security Standard (ADR-0020), which
+# disallows hostPath volumes outright. A PVC is the restricted-compliant
+# equivalent — read it via:
+#   kubectl exec -n ecom deploy/alertmanager -c alert-file-writer -- tail -f /alerts/service-down.log
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alert-log
+  namespace: ecom
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: ecom
+data:
+  alertmanager.yml: |
+    route:
+      receiver: file-webhook
+      group_by: ['alertname', 'job']
+      group_wait: 10s
+      group_interval: 30s
+      # 1h re-notify: this is a manually-tailed file, not a paging
+      # system — re-appending the same firing alert every 30s would
+      # make the log unreadable noise instead of a useful trail.
+      repeat_interval: 1h
+    receivers:
+      - name: file-webhook
+        webhook_configs:
+          - url: "http://localhost:9095/webhook"
+            send_resolved: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alert-file-writer-script
+  namespace: ecom
+data:
+  # Deliberately plain Node http (no framework) — this is a ~15-line
+  # webhook-to-file bridge, not a service; a dependency-free script
+  # keeps the image a stock node:20-alpine with nothing to npm-install
+  # (no build step, no supply-chain surface beyond the base image
+  # itself, which the Trivy CI stage — ADR-0019 — now scans anyway for
+  # any image built from a Dockerfile; this one isn't, it's just the
+  # stock image running an inline script via ConfigMap).
+  server.js: |
+    const http = require('http');
+    const fs = require('fs');
+
+    const LOG_PATH = process.env.ALERT_LOG_PATH || '/alerts/service-down.log';
+
+    const server = http.createServer((req, res) => {
+      // GET, not just POST-from-Alertmanager: lets "monitored manually"
+      // actually mean something in an environment where `kubectl exec`
+      // isn't reliably available (confirmed broken in this session's
+      // local Docker Desktop cluster) — `kubectl port-forward` +
+      // `curl localhost:<port>/` reads the same file without exec.
+      if (req.method === 'GET') {
+        fs.readFile(LOG_PATH, 'utf8', (err, data) => {
+          if (err && err.code === 'ENOENT') {
+            res.writeHead(200);
+            res.end('(no alerts logged yet)\n');
+            return;
+          }
+          if (err) {
+            res.writeHead(500);
+            res.end(String(err));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end(data);
+        });
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          const lines = (parsed.alerts || []).map((a) => {
+            const ts = new Date().toISOString();
+            const name = a.labels && a.labels.alertname;
+            const job = a.labels && a.labels.job;
+            const status = a.status;
+            const summary = a.annotations && a.annotations.summary;
+            return `[${ts}] status=${status} alert=${name} job=${job} summary=${summary}`;
+          });
+          if (lines.length > 0) {
+            fs.appendFileSync(LOG_PATH, lines.join('\n') + '\n');
+          }
+        } catch (e) {
+          fs.appendFileSync(LOG_PATH, `[${new Date().toISOString()}] failed to parse webhook payload: ${e.message}\n`);
+        }
+        res.writeHead(200);
+        res.end('ok');
+      });
+    });
+
+    server.listen(9095, () => console.log('alert-file-writer listening on :9095, writing to ' + LOG_PATH));
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: ecom
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: alertmanager }
+  template:
+    metadata:
+      labels: { app: alertmanager }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports: [{ containerPort: 9093 }]
+          volumeMounts:
+            - { name: config, mountPath: /etc/alertmanager }
+            - { name: data, mountPath: /alertmanager }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9093 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: 9093 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+        # Same pod as alertmanager (not a separate Deployment): the
+        # webhook URL is "http://localhost:9095/webhook" — co-locating
+        # avoids needing a second Service/DNS name for what is, in
+        # effect, a private implementation detail of "where do alerts
+        # go," not an independently-scaled or independently-deployed
+        # component.
+        - name: alert-file-writer
+          image: node:20-alpine
+          command: ["node", "/scripts/server.js"]
+          env:
+            - { name: ALERT_LOG_PATH, value: "/alerts/service-down.log" }
+          volumeMounts:
+            - { name: alert-writer-script, mountPath: /scripts, readOnly: true }
+            - { name: alert-log, mountPath: /alerts }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - { name: config, configMap: { name: alertmanager-config } }
+        - { name: alert-writer-script, configMap: { name: alert-file-writer-script } }
+        - { name: alert-log, persistentVolumeClaim: { claimName: alert-log } }
+        # Alertmanager's own --storage.path (silence/notification-log
+        # state) — emptyDir, not the alert-log PVC: losing this on pod
+        # restart just means old dedup/silence state resets, not data
+        # loss of the actual alert log a human reads.
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: ecom
+spec:
+  selector: { app: alertmanager }
+  ports: [{ port: 9093, targetPort: 9093 }]
