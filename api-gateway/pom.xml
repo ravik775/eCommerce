@@ -70,11 +70,16 @@
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>
-        <!--dependency->
+        <!-- Was commented out with no explanatory note (scaffolding
+             leftover, not a documented decision) — found live: this is
+             the reason api-gateway had zero test files at all, not even
+             the default contextLoads() stub every other service has.
+             Re-enabled 2026-08-16. -->
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
-        </dependency-->
+        </dependency>
         <!-- https://mvnrepository.com/artifact/org.springframework.cloud/spring-cloud-starter-gateway -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>

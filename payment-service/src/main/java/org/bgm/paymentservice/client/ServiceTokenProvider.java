@@ -34,9 +34,24 @@ class ServiceTokenProvider {
     private volatile Instant cachedTokenExpiry = Instant.EPOCH;
 
     ServiceTokenProvider(
-            @Value("${payment-service.order-service-client.token-uri}") String tokenUri,
-            @Value("${payment-service.order-service-client.client-id}") String clientId,
-            @Value("${payment-service.order-service-client.client-secret}") String clientSecret) {
+            // Flat, single-level defaults, not application.properties'
+            // nested-indirection form (that property's own value is
+            // itself "${KEYCLOAK_TOKEN_URI:...}") — found live, 2026-08-16:
+            // re-enabling this module's tests (see README's Code Quality
+            // section) surfaced that Spring Boot's PlaceholderParser
+            // fails to resolve that nested default in a plain
+            // @SpringBootTest context (PlaceholderResolutionException on
+            // contextLoads(), despite the property genuinely being
+            // present and correctly formed in application.properties).
+            // Root cause not fully isolated within this session's time
+            // budget; these inline defaults sidestep it without
+            // changing real-deployment behavior (K8s/Compose still
+            // supply real values via env vars, which still win — a
+            // property source with an actual value always beats a
+            // @Value default).
+            @Value("${payment-service.order-service-client.token-uri:http://keycloak:8080/realms/ecom/protocol/openid-connect/token}") String tokenUri,
+            @Value("${payment-service.order-service-client.client-id:payment-service}") String clientId,
+            @Value("${payment-service.order-service-client.client-secret:payment-service-dev-secret-CHANGE-IN-REAL-DEPLOYMENT}") String clientSecret) {
         this.tokenUri = tokenUri;
         this.clientId = clientId;
         this.clientSecret = clientSecret;

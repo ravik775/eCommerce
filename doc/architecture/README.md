@@ -54,7 +54,20 @@ Every non-trivial technology choice referenced above is backed by an evidence-ba
 | [ADR-0027](../adr/ADR-0027-payment-gateway-integration-deferred.md) | Real payment gateway integration — Stripe+Razorpay options researched, decision deferred (simulated processors continue) |
 | [ADR-0028](../adr/ADR-0028-gateway-role-based-admin-gate.md) | Gateway-level admin gate is role-based only — tenant dimension challenged and rejected (no data partitioning exists to enforce it) |
 | [ADR-0029](../adr/ADR-0029-local-dev-orchestration-scripts.md) | Local dev orchestration — plain Bash scripts (interim, superseded by Phase 5's docker-compose) over Make/Overmind/pulling Compose forward |
+| [ADR-0030](../adr/ADR-0030-provider-role-and-product-listing-gate.md) | Provider role + DRAFT/LISTED gate for self-service product listings — amends ADR-0025/ADR-0028 |
+| [ADR-0031](../adr/ADR-0031-order-history-view.md) | Order History view — amends ADR-0012's three-view UI scope |
+| [ADR-0032](../adr/ADR-0032-opentelemetry-tracing-and-unified-correlation.md) | OpenTelemetry distributed tracing, unified correlation ID, force-trace flag, order-rate metrics |
+| [ADR-0033](../adr/ADR-0033-admin-role-restricted-to-iam-operations-admin-split.md) | Split ADMIN into IAM-only IAM_ADMIN + operational CATALOG_ADMIN/INVENTORY_ADMIN — amends ADR-0025/0028/0030 |
+| [ADR-0034](../adr/ADR-0034-backup-and-replication-posture.md) | Backup/replication posture across Postgres, Kafka, Redis — closes ADR-0022's unimplemented `pg_dump` follow-up |
+| [ADR-0035](../adr/ADR-0035-cap-pacelc-consistency-model.md) | CAP/PACELC positioning — names the saga/outbox pattern's existing eventual-consistency trade-off explicitly (PA/EL) |
+| [ADR-0036](../adr/ADR-0036-capacity-planning-back-of-envelope.md) | Capacity planning — back-of-envelope sizing for 100 users/20 active/10k products, 5-year horizon |
+| [ADR-0037](../adr/ADR-0037-soc2-trust-services-criteria-mapping.md) | SOC 2 Trust Services Criteria — honest current-state mapping, not a compliance claim |
+| [ADR-0038](../adr/ADR-0038-local-sast-dast-reproducibility.md) | Local SAST/DAST reproducibility — `scripts/run-sast-dast-local.sh` |
+| [ADR-0039](../adr/ADR-0039-soc2-closure-roadmap.md) | SOC 2 closure roadmap — 2026 platform pricing researched, decided not to buy yet |
+| [ADR-0040](../adr/ADR-0040-data-classification-and-retention.md) | Data classification and retention policy |
+| [ADR-0041](../adr/ADR-0041-load-testing-deferred-and-base-strategy.md) | Load testing — deferred now (small fixed user base), k6-based base strategy defined for when it's needed |
+| [ADR-0042](../adr/ADR-0042-edge-tls-production-options.md) | Edge TLS — production options (cert-manager+ACME), local feasibility checked and deferred |
 
-ADR-0007–0009 were raised by the architect self-review ([11-architect-review.md](11-architect-review.md)) rather than the original planning pass. ADR-0010–0012 were added when implementation began, to cover the CI/CD pipeline and UI stack requested at that point. ADR-0013–0022 close out every remaining design gap and open decision found during a "rate this to a 10/10" hardening pass — no pending decisions remain as of ADR-0022; each wave is kept visible rather than backdated into earlier ADRs.
+ADR-0007–0009 were raised by the architect self-review ([11-architect-review.md](11-architect-review.md)) rather than the original planning pass. ADR-0010–0012 were added when implementation began, to cover the CI/CD pipeline and UI stack requested at that point. ADR-0013–0022 close out every remaining design gap and open decision found during a "rate this to a 10/10" hardening pass. ADR-0030–0033 came from later feature work (provider self-service listings, order history, OpenTelemetry tracing, the IAM_ADMIN/PLATFORM_ADMIN role split). ADR-0034–0042 came from a 2026-08-16 architecture review evaluating the system against security, observability, compliance, and capacity-planning criteria — each closes either a documentation gap (a decision that was never written down) or an implementation gap (a decision that was written down but never actually built, e.g. ADR-0013's WAF and ADR-0019's Trivy scanning, both closed that same session). Each wave is kept visible rather than backdated into earlier ADRs.
 
 New decisions follow [`../adr/template.md`](../adr/template.md).

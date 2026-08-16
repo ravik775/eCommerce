@@ -53,7 +53,7 @@ public class SecurityConfig {
 
     public SecurityConfig(
             KeycloakOidcUserService keycloakOidcUserService,
-            @Value("${keycloak.logout-uri}") String keycloakLogoutUri) {
+            @Value("${keycloak.logout-uri:http://localhost:8090/realms/ecom/protocol/openid-connect/logout}") String keycloakLogoutUri) {
         this.keycloakOidcUserService = keycloakOidcUserService;
         this.keycloakLogoutUri = keycloakLogoutUri;
     }

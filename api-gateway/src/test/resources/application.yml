@@ -1,0 +1,27 @@
+# Test-only. api-gateway normally gets its OAuth2 client registration
+# from config-server (config-repo/api-gateway.yml) or K8s env vars —
+# neither is reachable from a plain @SpringBootTest context, so without
+# this, contextLoads() fails with "No qualifying bean of type
+# ReactiveClientRegistrationRepository" (found live, 2026-08-16, the
+# same session that re-enabled this module's test dependency after it
+# had been commented out with no tests at all). Values below mirror
+# config-repo/api-gateway.yml's own dev-placeholder defaults — not real
+# credentials, and this file is never packaged into the runtime JAR.
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ecommerce-gateway
+            client-secret: changeme-gateway-oauth2-dev
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid
+        provider:
+          keycloak:
+            authorization-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/auth
+            token-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/certs
+            user-info-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/userinfo
+            user-name-attribute: sub

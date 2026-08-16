@@ -98,6 +98,15 @@
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
+        <!-- Test-only: TestSpanData.builder() for
+             ErrorAlwaysSampledSpanExporterTest — same version-management
+             chain as opentelemetry-exporter-otlp above (inherited via
+             Spring Boot's dependency management), no explicit version. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- ADR-0002 (doc/adr/ADR-0002-zero-trust-spire-app-level.md):
              app-level mTLS via the official SPIFFE Java Workload API
@@ -159,6 +168,17 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Test-only: common-lib itself has no logging implementation
+             on its main classpath (slf4j-api only — every consuming
+             Spring Boot service brings logback-classic transitively at
+             runtime), so AuditLoggerTest needs one to actually capture
+             log output via Logback's ListAppender rather than silently
+             hitting SLF4J's NOP no-op logger. -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
