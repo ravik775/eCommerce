@@ -82,3 +82,9 @@ Four related gaps, found via a structured audit against a new requirement ("same
 ## 2026-08-16 17:05 IST update — Settings toggle label rename
 
 Cosmetic only, recorded per this project's standing "every change gets an ADR-tracked decision" discipline. The `forceVerboseTracing` Settings toggle's label (`ui/src/index.html`) was changed from "Force detailed tracing" to "Detail Tracking" at explicit request, for a cleaner, less jargon-y label in the user menu. No behavior change — same checkbox id (`force-trace-toggle`), same `X-Force-Trace` header, same `CAN_TRACE`-gated visibility (see ADR-0048 for the server-side enforcement of that gate). Landed in the same commit as ADR-0048's audit-logging amendment.
+
+## 2026-08-16 20:25 IST update — label renamed again, plus a deployment gap found
+
+User reported the label still read the old text after the rename above shipped — root cause was a deployment gap, not a reverted change: the `ecomd-ui` Docker image was never rebuilt/redeployed during the session's earlier redeploy pass (which only covered the 7 backend services touched by that pass' code changes), so the live UI was still serving the previous image's bundled `index.html`. The source-level rename had, in fact, already landed correctly.
+
+Also renamed the label a second time, from "Detail Tracking" to **"Detail Trace"**, per explicit request comparing it against "Enable Trace" — "Detail Trace" was chosen as more consistent with a toggle (a state/mode name) rather than an action-button phrasing. Same checkbox id, same behavior, cosmetic only. This time bundled with an actual `ecomd-ui` image rebuild + redeploy so the live UI matches source.
