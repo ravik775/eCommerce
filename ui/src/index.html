@@ -34,6 +34,16 @@
             </li>
           </ul>
         </div>
+        <!-- ADR-0047: always shown, never disabled — see that ADR for
+             why: Keycloak's own Account Console already correctly
+             handles both "no password credential yet" (lets the user
+             set one) and "password exists" (lets them change it), so
+             there is no local state to check before showing this link.
+             Opens in a new tab since it's a genuinely separate app
+             (Keycloak's own UI), not a route this SPA owns. -->
+        <a class="user-menu-item" id="reset-password-link"
+           href="http://localhost:8090/realms/ecom/account/"
+           target="_blank" rel="noopener">Reset Password</a>
         <a class="user-menu-item" id="logout-link" href="/logout">Logout</a>
       </div>
     </div>
