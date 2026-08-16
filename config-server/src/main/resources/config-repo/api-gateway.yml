@@ -153,6 +153,16 @@ spring:
 # what gets redirected here, not the gateway itself.
 keycloak:
   logout-uri: http://localhost:8090/realms/ecom/protocol/openid-connect/logout
+
+# ADR-0049: bounds how long a Keycloak role grant/revocation can lag
+# behind an already-logged-in gateway session (SessionMaxAgeGatewayFilter
+# only maps realm_access.roles at initial login, otherwise the session's
+# authorities never change). 30 minutes matches this realm's typical SSO
+# idle window, so the forced re-login this triggers usually completes
+# silently rather than surfacing a login form.
+security:
+  session:
+    max-age: PT30M
             # RESOLVED (was "KNOWN OPEN ISSUE" — see git history for the
             # full debugging trail if curious): the earlier failures here
             # ("missing_user_name_attribute", then
