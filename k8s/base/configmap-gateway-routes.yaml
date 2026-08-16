@@ -51,6 +51,22 @@ data:
               predicates:
                 - Path=/order/**
               filters:
+                # ADR-0051: GET-only, same safety rule as the
+                # catalog-service-read route below — a POST/PUT/DELETE
+                # under this path (cancel/return) must never be silently
+                # replayed, but a GET lookup is idempotent and safe to
+                # retry once. Covers the "certificate_expired"/handshake
+                # class of transient SPIFFE rotation failure this ADR
+                # investigates — RetryGatewayFilterFactory's default
+                # `exceptions` list already includes java.io.IOException,
+                # which javax.net.ssl.SSLHandshakeException is a subtype
+                # of, so no extra `exceptions:` override is needed here.
+                - name: Retry
+                  args:
+                    retries: 1
+                    series: [SERVER_ERROR]
+                    methods: [GET]
+                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
                 # RewritePath, not StripPrefix=1: OrderController is
                 # mapped at /orders (plural) on order-service, not root
                 # — StripPrefix=1 would forward "/order" -> "" (root) and
@@ -180,6 +196,17 @@ data:
               predicates:
                 - Path=/user/**
               filters:
+                # ADR-0051: this route's only real traffic is GET
+                # /user/me (see the Path comment above), so an
+                # unqualified methods:[GET] restriction costs nothing
+                # while keeping the same non-idempotent-write safety
+                # rule as every other Retry filter in this file.
+                - name: Retry
+                  args:
+                    retries: 1
+                    series: [SERVER_ERROR]
+                    methods: [GET]
+                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
                 - RewritePath=/user(?<remaining>.*), /users${remaining}
                 - TokenRelay=
                 - name: RequestRateLimiter
@@ -197,6 +224,18 @@ data:
               predicates:
                 - Path=/inventory/**
               filters:
+                # ADR-0051: this route carries both reads and
+                # INVENTORY_ADMIN/PROVIDER writes (see RequireRole
+                # below), so — unlike order/user/catalog-read above,
+                # which are GET-only routes — methods:[GET] here matters:
+                # it's the only thing stopping a write (adjust stock,
+                # etc.) from ever being replayed on a transient failure.
+                - name: Retry
+                  args:
+                    retries: 1
+                    series: [SERVER_ERROR]
+                    methods: [GET]
+                    statuses: [BAD_GATEWAY, SERVICE_UNAVAILABLE, GATEWAY_TIMEOUT]
                 - TokenRelay=
                 # See catalog-service-admin route above for why this must
                 # be the name/args form, not the comma-shortcut string.

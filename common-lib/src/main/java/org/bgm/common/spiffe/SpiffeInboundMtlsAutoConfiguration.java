@@ -22,6 +22,8 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
@@ -68,7 +70,28 @@ import java.util.concurrent.TimeUnit;
 public class SpiffeInboundMtlsAutoConfiguration {
 
     private static final Path PEM_DIR = Path.of(System.getProperty("java.io.tmpdir"), "spiffe-svid");
-    private static final long RELOAD_INTERVAL_MINUTES = 5;
+    // ADR-0051: was 5 minutes — found live to be wide enough that a
+    // transient Workload API stream disconnect (SPIRE agent instability,
+    // logged as "UNAVAILABLE: Network closed"/"io exception" on the gRPC
+    // stream) could let the on-disk PEM cert's actual TTL run out before
+    // the next scheduled reload, so the connector kept presenting an
+    // already-expired certificate for the remainder of that window —
+    // confirmed live: a gateway->user-service call rejected with
+    // "certificate_expired" roughly a minute after such a disconnect.
+    // 30 seconds shrinks that exposure window ~10x for the common case
+    // (a rotation happened, this just hadn't picked it up yet); it does
+    // NOT help the harder case where the Workload API itself is down and
+    // X509Source has nothing fresher to give regardless of poll
+    // frequency — see checkExpiryMargin() below for that case.
+    private static final long RELOAD_INTERVAL_SECONDS = 30;
+    // If the currently-active SVID has less than this much validity left
+    // at poll time, something is already wrong upstream (a healthy
+    // Workload API connection would have delivered a new SVID well
+    // before this point, since SPIRE agents rotate at roughly half the
+    // SVID's TTL) — logged at WARN so it's visible before the cert
+    // actually expires, not just after, per this project's "surface a
+    // gap before it's found by someone else" pattern (see ADR-0048).
+    private static final Duration EXPIRY_WARNING_MARGIN = Duration.ofMinutes(2);
 
     private final List<Connector> liveConnectors = new CopyOnWriteArrayList<>();
 
@@ -163,7 +186,8 @@ public class SpiffeInboundMtlsAutoConfiguration {
                 t.setDaemon(true);
                 return t;
             });
-            executor.scheduleAtFixedRate(this::rotate, RELOAD_INTERVAL_MINUTES, RELOAD_INTERVAL_MINUTES, TimeUnit.MINUTES);
+            executor.scheduleAtFixedRate(
+                    this::rotate, RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
             running = true;
         }
 
@@ -177,6 +201,7 @@ public class SpiffeInboundMtlsAutoConfiguration {
             // Workload API hiccup here must cost at most one missed
             // rotation, not all of them.
             try {
+                checkExpiryMargin();
                 SpiffePemFileWriter.writeCurrentSvid(x509Source, PEM_DIR);
                 for (Connector connector : connectors) {
                     // reloadSslHostConfigs() lives on the protocol handler
@@ -189,6 +214,30 @@ public class SpiffeInboundMtlsAutoConfiguration {
                 }
             } catch (Exception e) {
                 log.error("SPIFFE SVID rotation failed; will retry at the next scheduled interval", e);
+            }
+        }
+
+        // ADR-0051: java-spiffe's X509Source has no public
+        // watcher/callback API (verified by decompiling
+        // java-spiffe-core — DefaultX509Source's own internal watcher is
+        // private) and getX509Svid() never proactively invalidates on a
+        // Workload API disconnect, it just keeps returning the last
+        // successfully-pushed snapshot. So polling frequency alone can't
+        // detect "the Workload API is down and nothing fresher is
+        // coming" — this check makes that condition visible (a WARN
+        // before expiry) instead of silent until a real handshake fails.
+        private void checkExpiryMargin() {
+            try {
+                Instant notAfter = x509Source.getX509Svid().getChain().get(0).getNotAfter().toInstant();
+                Duration remaining = Duration.between(Instant.now(), notAfter);
+                if (remaining.compareTo(EXPIRY_WARNING_MARGIN) < 0) {
+                    log.warn("SPIFFE SVID expires in {} — Workload API may not be delivering rotations "
+                                    + "(a healthy connection rotates well before this point); "
+                                    + "connectors will start rejecting/being rejected once it lapses",
+                            remaining);
+                }
+            } catch (Exception e) {
+                log.warn("Unable to check SPIFFE SVID expiry margin", e);
             }
         }
 
