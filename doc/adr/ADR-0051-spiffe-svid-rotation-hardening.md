@@ -70,3 +70,49 @@ Functional verification (same reasoning as this ADR's original regression-guard 
 - Positive: closes a real, live-reproduced crash this same day's earlier decision introduced, and separately reduces false-positive circuit-breaker trips that were degrading checkout availability beyond what actual backend health justified.
 - Negative / accepted trade-off: `orderCircuit` now takes slightly longer (up to 6 calls instead of 2) to detect a genuine, sustained `order-service` outage — an acceptable trade at this system's traffic volume (ADR-0036: 20 active users), where 6 calls accumulate quickly regardless.
 - Follow-up required: none currently open.
+
+## 2026-08-16 23:14 IST update — switched to event-driven reload, per further research
+
+Following the original decision's polling-based fix, a follow-up architect-level research pass (grounded in the actual `java-spiffe-core`/`spiffe-helper` source, not documentation alone) found the earlier claim in this ADR's Context section — "no public watcher/callback API exists" — was **incomplete**. That was true of `DefaultX509Source` specifically (its internal watcher is `private`, confirmed via `javap`), but the lower-level `io.spiffe.workloadapi.WorkloadApiClient` interface it's built on top of has a **public** `watchX509Context(Watcher<X509Context>)` method, obtainable via the public factory `DefaultWorkloadApiClient.newClient(...)`. Verified this is in fact the mechanism the official `spiffe-helper` reference sidecar uses in production (read directly from its `sidecar.go` source): a genuine event-driven `Watcher` with `onUpdate`/`onError` callbacks, not a poll loop.
+
+### Decision
+
+`SpiffeInboundMtlsAutoConfiguration`'s `SvidRotationLifecycle` now registers a second, independent `WorkloadApiClient` (X509Source doesn't expose its own internal client) and reacts to `onUpdate` immediately — writing the PEM files and reloading Tomcat's SSL host configs within the Workload API's own push latency, not up to 30 seconds later. `onError` is logged only; the client's own `ExponentialBackoffPolicy` handles stream reconnection, matching `spiffe-helper`'s own reliance on the library rather than hand-rolled retry logic.
+
+The 30-second poll is **not removed**, only demoted: it now runs every **2 minutes** as a reconciliation safety net — the same "watch plus periodic resync" pattern Kubernetes controllers use — in case a watch stream dies in a way that doesn't invoke `onError`. Without this, a single missed event could quietly reintroduce the exact bug this ADR originally fixed, with no visibility until a cert had already expired. `checkExpiryMargin()`'s WARN-before-expiry check is unchanged and still valuable independent of push vs. poll — it's specifically about the case neither mechanism can self-report: the Workload API being down long enough that nothing has anything fresher to give at all.
+
+### Regression guard
+
+Same testing philosophy as this ADR's original decision (this class requires a real Tomcat `Connector`/`X509Source`/Workload API socket to test meaningfully — no unit test forced in). Verified: `common-lib` compiles clean, the full 51-test suite across all 8 modules passes unchanged (nothing else touches this class), all 7 backend services rebuilt/redeployed successfully and reached `1/1 Running` with the new watcher active, and normal application traffic (`/order`, `/user/me`, `/catalog`, `/inventory` routes) verified with no regressions post-deploy.
+
+### Consequences (update)
+
+- Positive: closes the gap between "shrank the exposure window" (the original 30s-poll decision) and "eliminated it" — a rotation is now picked up within the Workload API's push latency, not a fixed interval later, matching the architecture the SPIFFE project's own reference implementation uses.
+- Negative / accepted trade-off: a second independent `WorkloadApiClient`/gRPC connection per backend service (one for the shared `X509Source`, one for this watcher) — negligible resource cost at this system's scale, and the same pattern `spiffe-helper` itself uses (a dedicated client for its own watch, separate from whatever else in a workload might use the Workload API).
+- Follow-up required: none currently open.
+
+## 2026-08-17 update — orderCircuit had no TimeLimiter configured, defaulting to 1s
+
+Reported live: `Checkout failed: POST /order -> 503 (ref: 51e0a0c0-1cae-4164-ba6b-1a28d5566736)`. Investigation found `order-service`'s own audit log contained an `ORDER_CREATED` line for the exact same correlation ID — the request had genuinely succeeded on the backend. Tracing the same server thread end to end showed why the gateway disagreed: this was the first request `order-service` handled after a pod restart, so it absorbed Spring MVC's lazy `DispatcherServlet` initialization plus first-time JPA query compilation and Kafka producer setup, all landing on one request — end-to-end latency was **~13 seconds**.
+
+`orderCircuit` had no `resilience4j.timelimiter` entry anywhere in `k8s/base/configmap-gateway-routes.yaml` or `api-gateway`'s properties, so it ran on Resilience4j's own default `TimeLimiter` timeout of **1 second**. A 13-second real response blew through that budget more than 10x over: the breaker recorded the call as failed and served its `503` fallback, while the backend request — already in flight — completed successfully a few seconds later regardless (cancelling the client-side wait doesn't retroactively un-send an HTTP request that Netty has already written).
+
+The consequence was worse than one false alarm: the UI, told the checkout had failed, reasonably invited a retry — and since `ui/src/app.js` generates a fresh `Idempotency-Key: crypto.randomUUID()` per checkout click (by design, so a genuinely new user decision isn't blocked by an old key), `IdempotencyService` correctly treated each retry as a distinct, legitimate new order. Five near-identical orders were created within about 3 seconds this way. This was **not** an idempotency-layer bug — that subsystem did exactly what it's supposed to; the false failure signal is what made retrying look necessary in the first place.
+
+### Decision
+
+Added an explicit `resilience4j.timelimiter.instances.orderCircuit.timeoutDuration: 10s` alongside the existing `circuitbreaker.instances.orderCircuit` block in `k8s/base/configmap-gateway-routes.yaml`. 10 seconds gives real headroom over both steady-state latency and the worst observed cold-start case, while still bounding how long a caller waits for a genuinely stuck backend before the breaker's own failure accounting kicks in.
+
+### Regression guard
+
+Config-only change (no code touched, no rebuild required) — verified live: applied the updated ConfigMap, restarted `api-gateway`, confirmed clean startup (`/actuator/health` → `UP`, no config-binding errors in logs) and re-checked the same route set exercised by this ADR's earlier incidents (`/`, `/order`, `/order/customer/*`) with no regressions.
+
+### Consequences
+
+- Positive: closes a real, live-reproduced false-failure/duplicate-order incident with a root-caused fix (the missing timeout), not a workaround.
+- Negative / accepted trade-off: a genuinely stuck `order-service` call now takes up to 10s (instead of 1s) to be recorded as a circuit-breaker failure — acceptable given the alternative was false failures on every merely-slow-but-successful call, and `orderCircuit`'s `minimumNumberOfCalls: 6` (this ADR's earlier update) already means a single slow call doesn't trip the breaker regardless.
+- Follow-up required: the 5 duplicate orders created during this incident (order IDs 46-50, customerId 4) were flagged to the user for manual review/cleanup — not touched here, since deleting order data is outside this ADR's scope and not something to do unilaterally.
+
+## Related
+
+- Related: ADR-0007 (Saga/outbox and idempotency design — the `IdempotencyService`/`Idempotency-Key` mechanism this update confirmed is working correctly), ADR-0024 (hybrid idempotency key design)

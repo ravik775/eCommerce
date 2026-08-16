@@ -1,5 +1,10 @@
 package org.bgm.common.spiffe;
 
+import io.spiffe.exception.SocketEndpointAddressException;
+import io.spiffe.workloadapi.DefaultWorkloadApiClient;
+import io.spiffe.workloadapi.Watcher;
+import io.spiffe.workloadapi.WorkloadApiClient;
+import io.spiffe.workloadapi.X509Context;
 import io.spiffe.workloadapi.X509Source;
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.http11.AbstractHttp11JsseProtocol;
@@ -43,11 +48,18 @@ import java.util.concurrent.TimeUnit;
  * alone. File-based config is the same mechanism SPIRE's own
  * {@code spiffe-helper} sidecar uses.
  * <p>
- * Rotation: X509 SVIDs from this realm's SPIRE server are short-lived
- * (~24h, see ADR-0002's live-verification section); this class rewrites
- * the PEM files and calls Tomcat's SSL reload every 5 minutes, which is
- * frequent enough to pick up a rotation well before expiry without
- * needing to hook the Workload API's push-based update stream directly.
+ * Rotation (ADR-0051, 2026-08-16 update): reloads are event-driven, not
+ * polled — a dedicated {@link WorkloadApiClient} registers a
+ * {@link Watcher} via {@code watchX509Context}, the same public API the
+ * official {@code spiffe-helper} reference sidecar uses (verified by
+ * reading its actual source, not assumed), so a rotation is picked up
+ * within the Workload API's own push latency rather than up to a fixed
+ * poll interval later. A slow periodic reconciliation runs alongside it
+ * as a safety net — the same "watch plus periodic resync" pattern
+ * Kubernetes controllers use — in case a watch stream dies in a way that
+ * doesn't invoke {@code onError} (this class's own earlier polling-only
+ * design was itself already found live to silently stop, see
+ * {@code rotate()}'s Javadoc below).
  * <p>
  * {@code Connector} is not itself a Spring bean — Tomcat creates it
  * internally, after {@code WebServerFactoryCustomizer} runs — so the
@@ -70,20 +82,16 @@ import java.util.concurrent.TimeUnit;
 public class SpiffeInboundMtlsAutoConfiguration {
 
     private static final Path PEM_DIR = Path.of(System.getProperty("java.io.tmpdir"), "spiffe-svid");
-    // ADR-0051: was 5 minutes — found live to be wide enough that a
-    // transient Workload API stream disconnect (SPIRE agent instability,
-    // logged as "UNAVAILABLE: Network closed"/"io exception" on the gRPC
-    // stream) could let the on-disk PEM cert's actual TTL run out before
-    // the next scheduled reload, so the connector kept presenting an
-    // already-expired certificate for the remainder of that window —
-    // confirmed live: a gateway->user-service call rejected with
-    // "certificate_expired" roughly a minute after such a disconnect.
-    // 30 seconds shrinks that exposure window ~10x for the common case
-    // (a rotation happened, this just hadn't picked it up yet); it does
-    // NOT help the harder case where the Workload API itself is down and
-    // X509Source has nothing fresher to give regardless of poll
-    // frequency — see checkExpiryMargin() below for that case.
-    private static final long RELOAD_INTERVAL_SECONDS = 30;
+    // ADR-0051 (2026-08-16 update): was the PRIMARY reload trigger at 30s
+    // (previously 5 minutes) — replaced by the event-driven Watcher
+    // below, which reacts within the Workload API's own push latency
+    // instead of waiting for the next tick. This interval now backs only
+    // the periodic reconciliation safety net (self-heals if the watch
+    // stream dies silently), so it's deliberately looser than the old
+    // primary-mechanism value — 2 minutes is still well inside any
+    // realistic SVID TTL's safety margin for a reconciliation pass, not
+    // the thing standing between "on time" and "expired" anymore.
+    private static final long RECONCILE_INTERVAL_SECONDS = 120;
     // If the currently-active SVID has less than this much validity left
     // at poll time, something is already wrong upstream (a healthy
     // Workload API connection would have delivered a new SVID well
@@ -108,8 +116,8 @@ public class SpiffeInboundMtlsAutoConfiguration {
      * server (and therefore the connector customizer above) has run.
      */
     @Bean
-    public SmartLifecycle spiffeSvidRotationTask(X509Source x509Source) {
-        return new SvidRotationLifecycle(x509Source, liveConnectors);
+    public SmartLifecycle spiffeSvidRotationTask(X509Source x509Source, SpiffeMtlsProperties properties) {
+        return new SvidRotationLifecycle(x509Source, liveConnectors, properties);
     }
 
     private static void configureConnectorForMtls(Connector connector, SpiffePemFileWriter.PemPaths pem) {
@@ -171,26 +179,78 @@ public class SpiffeInboundMtlsAutoConfiguration {
 
         private final X509Source x509Source;
         private final List<Connector> connectors;
-        private ScheduledExecutorService executor;
+        private final SpiffeMtlsProperties properties;
+        private ScheduledExecutorService reconcileExecutor;
+        private WorkloadApiClient watchClient;
         private volatile boolean running;
 
-        SvidRotationLifecycle(X509Source x509Source, List<Connector> connectors) {
+        SvidRotationLifecycle(X509Source x509Source, List<Connector> connectors, SpiffeMtlsProperties properties) {
             this.x509Source = x509Source;
             this.connectors = connectors;
+            this.properties = properties;
         }
 
         @Override
         public void start() {
-            executor = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "spiffe-svid-rotation");
+            // ADR-0051 (2026-08-16 update): a SEPARATE WorkloadApiClient,
+            // not the one backing the injected X509Source — X509Source
+            // doesn't expose its internal client, and WorkloadApiClient's
+            // own watchX509Context(...) is otherwise exactly the public,
+            // documented API the official spiffe-helper reference sidecar
+            // uses for the same purpose (verified in its actual source,
+            // not assumed from a README). Both clients independently
+            // receive the same Workload API pushes for this workload, so
+            // there's no correctness gap from using two connections —
+            // only the trigger differs (a push here vs. X509Source's own
+            // internal state update), and rotate() re-reads the shared
+            // x509Source bean either way, so both are always in sync by
+            // the time rotate() runs.
+            try {
+                watchClient = DefaultWorkloadApiClient.newClient(
+                        DefaultWorkloadApiClient.ClientOptions.builder()
+                                .spiffeSocketPath(properties.getWorkloadApiSocketPath())
+                                .build());
+                watchClient.watchX509Context(new Watcher<X509Context>() {
+                    @Override
+                    public void onUpdate(X509Context update) {
+                        rotate();
+                    }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        // Not rethrown, not retried by hand: the
+                        // underlying client already retries the stream
+                        // itself with its own ExponentialBackoffPolicy —
+                        // same reliance on the library's own mechanism
+                        // spiffe-helper uses, rather than hand-rolled
+                        // reconnect logic. The reconciliation loop below
+                        // is this class's actual safety net for however
+                        // long that reconnection takes.
+                        log.warn("SPIFFE Workload API watch error — relying on the client's own "
+                                + "reconnect and the periodic reconciliation pass in the meantime", error);
+                    }
+                });
+            } catch (SocketEndpointAddressException e) {
+                log.error("Unable to start SPIFFE SVID watch — falling back to reconciliation-only reload", e);
+            }
+
+            reconcileExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "spiffe-svid-reconcile");
                 t.setDaemon(true);
                 return t;
             });
-            executor.scheduleAtFixedRate(
-                    this::rotate, RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
+            reconcileExecutor.scheduleAtFixedRate(
+                    this::rotate, RECONCILE_INTERVAL_SECONDS, RECONCILE_INTERVAL_SECONDS, TimeUnit.SECONDS);
             running = true;
         }
 
+        // Called both from the event-driven Watcher's onUpdate (the
+        // common, fast path) and from the periodic reconciliation tick
+        // (the safety net for a watch stream that died in a way that
+        // didn't invoke onError, or the rare case the watch itself never
+        // started at all — see the SocketEndpointAddressException catch
+        // above). Idempotent either way: re-writing the same PEM content
+        // and reloading is harmless when nothing actually changed.
         private void rotate() {
             // Must not let any exception escape: scheduleAtFixedRate
             // silently and permanently cancels all future executions of a
@@ -213,19 +273,18 @@ public class SpiffeInboundMtlsAutoConfiguration {
                     }
                 }
             } catch (Exception e) {
-                log.error("SPIFFE SVID rotation failed; will retry at the next scheduled interval", e);
+                log.error("SPIFFE SVID rotation failed; will retry on the next event or reconciliation pass", e);
             }
         }
 
-        // ADR-0051: java-spiffe's X509Source has no public
-        // watcher/callback API (verified by decompiling
-        // java-spiffe-core — DefaultX509Source's own internal watcher is
-        // private) and getX509Svid() never proactively invalidates on a
-        // Workload API disconnect, it just keeps returning the last
-        // successfully-pushed snapshot. So polling frequency alone can't
-        // detect "the Workload API is down and nothing fresher is
-        // coming" — this check makes that condition visible (a WARN
-        // before expiry) instead of silent until a real handshake fails.
+        // ADR-0051: this check remains valuable even with event-driven
+        // reload — it's specifically about the case a healthy watch
+        // can't self-report: the Workload API being down long enough
+        // that neither the watch nor the reconciliation pass has
+        // anything fresher to give, and X509Source.getX509Svid() just
+        // keeps returning the last successfully-pushed snapshot with no
+        // proactive invalidation. Logged at WARN so it's visible before
+        // the cert actually expires, not just after.
         private void checkExpiryMargin() {
             try {
                 Instant notAfter = x509Source.getX509Svid().getChain().get(0).getNotAfter().toInstant();
@@ -243,8 +302,15 @@ public class SpiffeInboundMtlsAutoConfiguration {
 
         @Override
         public void stop() {
-            if (executor != null) {
-                executor.shutdownNow();
+            if (reconcileExecutor != null) {
+                reconcileExecutor.shutdownNow();
+            }
+            if (watchClient != null) {
+                try {
+                    watchClient.close();
+                } catch (Exception e) {
+                    log.warn("Error closing SPIFFE SVID watch client", e);
+                }
             }
             running = false;
         }

@@ -290,3 +290,31 @@ data:
             minimumNumberOfCalls: 6
             failureRateThreshold: 50
             waitDurationInOpenState: 30s
+      timelimiter:
+        instances:
+          orderCircuit:
+            # ADR-0051 follow-up (2026-08-17): no timelimiter config
+            # existed here at all, so Resilience4j's own default applied
+            # — 1 second. Found live: a real POST /order succeeded on
+            # order-service (confirmed via its own ORDER_CREATED audit
+            # line matching the gateway's correlation ID) but took ~13s
+            # end to end, since it was the first request that pod handled
+            # after a restart — Spring MVC lazily initializes
+            # DispatcherServlet on first use, plus first-time JPA query
+            # compilation and Kafka producer setup, all landing on one
+            # unlucky request. The 1s timeout gave up long before that
+            # finished, CircuitBreaker reported it as a failed call and
+            # served its 503 fallback, and the user — reasonably, having
+            # been told it failed — retried, each retry using a fresh
+            # Idempotency-Key (ui/src/app.js generates one per checkout
+            # click by design, so IdempotencyService correctly treated
+            # each as a genuinely new order) and therefore each retry
+            # ALSO succeeding: 5 near-identical orders were created this
+            # way in under 3 seconds. Not an idempotency bug — the
+            # idempotency layer did exactly what it's supposed to; the
+            # false failure signal is what made retrying look necessary.
+            # 10s gives real headroom over both steady-state latency and
+            # the worst-case cold-start case observed live, while still
+            # bounding how long a client waits for a genuinely stuck
+            # backend before the breaker's own accounting kicks in.
+            timeoutDuration: 10s
