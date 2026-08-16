@@ -10,21 +10,31 @@
   <header>
     <h1>eCommerce</h1>
     <div id="user-menu">
-      <div id="user-menu-identity">
-        <span id="whoami">Loading…</span>
-        <select id="roles-dropdown" hidden></select>
-      </div>
-      <!-- ADR-0032: only shown at all for a session with CAN_TRACE —
-           hidden, not just disabled, same client-side-convenience
-           pattern as the role-gated tabs (real enforcement is the
-           header ForceTraceFilter/CorrelationTraceGatewayFilter check
-           on the backend). -->
-      <button id="settings-btn" hidden>⚙ Settings</button>
-      <div id="settings-panel" hidden>
-        <label>
-          <input type="checkbox" id="force-trace-toggle" />
-          Force detailed tracing
-        </label>
+      <button id="user-menu-btn" aria-haspopup="true" aria-expanded="false">
+        <span id="whoami">Loading…</span> ▾
+      </button>
+      <div id="user-menu-dropdown" hidden>
+        <div class="user-menu-item user-menu-submenu-trigger" id="roles-menu-trigger">
+          Roles ▸
+          <ul id="roles-menu-list" class="user-menu-submenu"></ul>
+        </div>
+        <!-- ADR-0032: only shown at all for a session with CAN_TRACE —
+             hidden, not just disabled, same client-side-convenience
+             pattern as the role-gated tabs (real enforcement is the
+             header ForceTraceFilter/CorrelationTraceGatewayFilter check
+             on the backend). -->
+        <div class="user-menu-item user-menu-submenu-trigger" id="settings-menu-trigger" hidden>
+          Settings ▸
+          <ul class="user-menu-submenu">
+            <li>
+              <label>
+                <input type="checkbox" id="force-trace-toggle" />
+                Force detailed tracing
+              </label>
+            </li>
+          </ul>
+        </div>
+        <a class="user-menu-item" id="logout-link" href="/logout">Logout</a>
       </div>
     </div>
   </header>

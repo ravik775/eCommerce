@@ -49,14 +49,22 @@ function refFrom(res) {
   return res.headers.get('X-Correlation-Id') || 'unknown';
 }
 
+// Display-only shortening (first segment of the UUID) for the success
+// message's "trace ref" — deliberately NOT used for error messages
+// (refFrom above), which stay full-length so they remain directly
+// paste-able into a Loki/Tempo query. A short prefix is unique enough
+// for a human glancing at a success toast, not for a log search.
+function shortRef(ref) {
+  return ref === 'unknown' ? ref : ref.split('-')[0];
+}
+
 async function loadMe() {
   const res = await apiFetch('/user/me');
   if (!res.ok) throw new Error(`GET /user/me -> ${res.status}`);
   me = await res.json();
   document.getElementById('whoami').textContent = me.name || me.email;
-  const rolesDropdown = document.getElementById('roles-dropdown');
-  rolesDropdown.innerHTML = me.roles.map((r) => `<option value="${r}">${r}</option>`).join('');
-  rolesDropdown.hidden = false;
+  document.getElementById('roles-menu-list').innerHTML =
+    me.roles.map((r) => `<li>${r}</li>`).join('');
 
   // Role-gated tabs — hidden by default in index.html, unhidden here.
   // Client-side only, for UI convenience: the real enforcement is the
@@ -75,7 +83,7 @@ async function loadMe() {
   }
   // ADR-0032: force-trace Settings toggle.
   if (me.roles.includes('CAN_TRACE')) {
-    document.getElementById('settings-btn').hidden = false;
+    document.getElementById('settings-menu-trigger').hidden = false;
   }
   await loadMyOrders();
 }
@@ -304,7 +312,14 @@ async function checkout() {
     const ref = refFrom(res);
     if (!res.ok) throw new Error(`POST /order -> ${res.status} (ref: ${ref})`);
     const order = await res.json();
-    status.textContent = `Order #${order.id} placed (ref: ${ref}) — payment processing.`;
+    // Order #<id> is the real, short, database-unique identifier
+    // (auto-increment primary key) — the one to quote for "my order."
+    // The correlation ref (a full UUID, kept intact everywhere else —
+    // logs, response headers, Tempo/Loki lookups — since shortening
+    // *that* would risk losing traceability) is shown only as a short,
+    // clearly-separate "trace ref" prefix for support use, not
+    // presented as if it were the order's own identifier.
+    status.textContent = `Order #${order.id} placed (trace ref: ${shortRef(ref)}) — payment processing.`;
     cart.length = 0;
     renderCart();
     await loadMyOrders();
@@ -321,12 +336,28 @@ for (const btn of document.querySelectorAll('.tab-btn')) {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 }
 
-// ADR-0032: click toggles the panel open/closed; the panel itself only
-// ever becomes reachable (settings-btn unhidden) for a CAN_TRACE session.
-document.getElementById('settings-btn').addEventListener('click', () => {
-  const panel = document.getElementById('settings-panel');
-  panel.hidden = !panel.hidden;
+// Single username dropdown: Roles / Settings (CAN_TRACE only) / Logout —
+// click the username to open/close it; click anywhere outside to close.
+// Roles/Settings are submenus revealed on hover/click of their own row
+// (see style.css), not separate top-level buttons — consolidates what
+// used to be a flat button+dropdown+panel spread across the header into
+// one place, per the "Username -> Roles/Logout/Settings" structure.
+const userMenuBtn = document.getElementById('user-menu-btn');
+const userMenuDropdown = document.getElementById('user-menu-dropdown');
+userMenuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !userMenuDropdown.hidden;
+  userMenuDropdown.hidden = isOpen;
+  userMenuBtn.setAttribute('aria-expanded', String(!isOpen));
 });
+document.addEventListener('click', (e) => {
+  if (!userMenuDropdown.hidden && !document.getElementById('user-menu').contains(e.target)) {
+    userMenuDropdown.hidden = true;
+    userMenuBtn.setAttribute('aria-expanded', 'false');
+  }
+});
+// ADR-0032: only reachable at all for a session with CAN_TRACE
+// (settings-menu-trigger stays hidden otherwise — see loadMe()).
 document.getElementById('force-trace-toggle').addEventListener('change', (e) => {
   forceTrace = e.target.checked;
 });
