@@ -12,7 +12,7 @@ Single reference for the realm's roles and what each one actually grants. The au
 | `INVENTORY_ADMIN` | Restock **any** product's inventory | Catalog mutation, user/role management | No |
 | `IAM_ADMIN` | Reserved for assigning/revoking roles for other users | **Nothing operational** — cannot touch catalog or inventory at all | No |
 | `PLATFORM_ADMIN` | Everything `CATALOG_ADMIN` + `INVENTORY_ADMIN` + `IAM_ADMIN` grant, combined | — | **Yes** — a real Keycloak composite role; its JWT's `realm_access.roles` contains all three automatically |
-| `CAN_TRACE` | Can enable the Settings → force verbose tracing toggle (ADR-0032, not yet implemented) | Nothing else | No |
+| `CAN_TRACE` | Can enable the Settings → "Detail Trace" toggle to force full-detail tracing for their own session (ADR-0032, implemented and server-side enforced per ADR-0048 — the header alone is not sufficient, both the gateway and every backend independently check this role) | Nothing else | No |
 
 **History**: prior to ADR-0033 (2026-08-15), `IAM_ADMIN` was the operational super-role (what `CATALOG_ADMIN`/`INVENTORY_ADMIN` are now) and `PLATFORM_ADMIN` additionally had user-management on top. ADR-0033 flipped this: `IAM_ADMIN` was narrowed to user-management only, and the operational capability was split into two independent roles. If you find code or docs elsewhere still describing `IAM_ADMIN` as operational, that's now stale — flag it.
 
