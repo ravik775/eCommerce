@@ -4,6 +4,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.TextMapSetter;
+import org.bgm.common.audit.AuditLogger;
 import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.tracing.ErrorAlwaysSampledSpanExporter;
 import org.slf4j.Logger;
@@ -12,6 +13,10 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -30,6 +35,16 @@ import java.util.UUID;
 public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(CorrelationTraceGatewayFilter.class);
+
+    // ADR-0048: same fix as common-lib's ForceTraceFilter, reactive
+    // equivalent — found live, a request with a manually-added
+    // X-Force-Trace header still force-exported the gateway's own span
+    // regardless of the caller's actual roles. ReactiveSecurityContextHolder,
+    // not SecurityContextHolder (WebFlux keeps the security context in
+    // Reactor Context, not a ThreadLocal, so the synchronous holder is
+    // always empty here) — same ROLE_CAN_TRACE authority
+    // KeycloakOidcUserService already maps onto every OidcUser.
+    private static final String CAN_TRACE_AUTHORITY = "ROLE_CAN_TRACE";
 
     // Found live: a checkout request's OTel trace ID on the gateway's own
     // span (e.g. "006d2268...") never matched order-service's span for
@@ -66,17 +81,6 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)
                 .header(CorrelationConstants.TRACE_ID_HEADER, traceId);
-
-        // ADR-0032 (CAN_TRACE Settings toggle): stamps the gateway's own
-        // span for this request — the header itself is forwarded
-        // downstream unchanged (Spring Cloud Gateway proxies incoming
-        // headers by default), so each backend's own ForceTraceFilter
-        // (common-lib) does the same stamp on its own span. See
-        // ForceTraceFilter's Javadoc for why this is a direct header
-        // check rather than OTel baggage propagation.
-        if ("true".equalsIgnoreCase(request.getHeaders().getFirst("X-Force-Trace"))) {
-            Span.current().setAttribute(ErrorAlwaysSampledSpanExporter.FORCE_TRACE_ATTRIBUTE, true);
-        }
 
         // Links the backend's span to the gateway's span as its real
         // parent — this is what actually makes Tempo present one tree
@@ -116,9 +120,61 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         // the only one. Fixing it here (post-response, by re-setting)
         // isn't reliable — by the time this Mono completes the response
         // may already be committed/flushed.
-        return chain.filter(exchange.mutate().request(mutatedRequest).build())
+        Mono<Void> proceed = chain.filter(exchange.mutate().request(mutatedRequest).build())
                 .doOnSuccess(v -> logIfError(exchange, correlationId, traceId, null))
                 .doOnError(ex -> logIfError(exchange, correlationId, traceId, ex));
+
+        // ADR-0048: the header alone is not authorization — verified
+        // against the caller's actual roles (ReactiveSecurityContextHolder,
+        // not the synchronous SecurityContextHolder, since WebFlux keeps
+        // the security context in Reactor Context, not a ThreadLocal)
+        // before stamping the gateway's own span. If there's no security
+        // context (shouldn't happen here — everything past this filter
+        // requires authentication — but fails closed either way), the
+        // attribute is simply never set and the request proceeds
+        // normally.
+        if (!"true".equalsIgnoreCase(request.getHeaders().getFirst("X-Force-Trace"))) {
+            return proceed;
+        }
+        return ReactiveSecurityContextHolder.getContext()
+                .map(SecurityContext::getAuthentication)
+                .doOnNext(authentication -> {
+                    if (callerHasCanTraceRole(authentication)) {
+                        Span.current().setAttribute(ErrorAlwaysSampledSpanExporter.FORCE_TRACE_ATTRIBUTE, true);
+                    } else {
+                        auditDenied(authentication, exchange);
+                    }
+                })
+                .then(proceed);
+    }
+
+    // ADR-0048 (2026-08-16 update): same rationale as ForceTraceFilter's
+    // servlet-side audit line — a silent fail-closed denial left no
+    // trail to filter/alert on. Same AuditLogger, same event name, so
+    // both the gateway hop and every downstream servlet hop of a single
+    // denied attempt are findable under one auditEvent grep.
+    private void auditDenied(Authentication authentication, ServerWebExchange exchange) {
+        String principal = authentication != null ? String.valueOf(authentication.getName()) : "anonymous";
+        AuditLogger.log("FORCE_TRACE_DENIED", AuditLogger.fields()
+                .with("principal", principal)
+                .with("path", exchange.getRequest().getPath().value())
+                .build());
+    }
+
+    // Package-private (not private): unit-tested directly in
+    // CorrelationTraceGatewayFilterTest — the decision logic itself,
+    // isolated from the surrounding reactive/OTel-context wiring, which
+    // is verified separately by live testing (see ADR-0048).
+    boolean callerHasCanTraceRole(Authentication authentication) {
+        if (authentication == null) {
+            return false;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if (CAN_TRACE_AUTHORITY.equals(authority.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void logIfError(ServerWebExchange exchange, String correlationId, String traceId, Throwable ex) {

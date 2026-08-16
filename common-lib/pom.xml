@@ -170,6 +170,14 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Test-only: MockHttpServletRequest/Response for
+             ForceTraceFilterTest — a thin, well-established dependency
+             rather than hand-rolling servlet interface stubs. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- Test-only: common-lib itself has no logging implementation
              on its main classpath (slf4j-api only — every consuming
              Spring Boot service brings logback-classic transitively at

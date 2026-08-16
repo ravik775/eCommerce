@@ -2,8 +2,13 @@ package org.bgm.apigateway.config;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.core.Ordered;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -36,5 +41,35 @@ class CorrelationTraceGatewayFilterTest {
                         + "trace propagation with no compile-time signal; see ADR-0043");
         assertTrue(order > Ordered.HIGHEST_PRECEDENCE,
                 "must not run at HIGHEST_PRECEDENCE — that was the original bug");
+    }
+
+    // ADR-0048: found live — a request with a manually-added
+    // X-Force-Trace header still force-exported the gateway's own span
+    // regardless of the caller's actual roles (the servlet-side
+    // equivalent of this bug, ForceTraceFilter, was found the same way —
+    // see ForceTraceFilterTest in common-lib). These test the decision
+    // logic directly, isolated from the surrounding reactive/OTel-context
+    // wiring — see CorrelationTraceGatewayFilter's field Javadoc for why
+    // that wiring is verified by live testing instead.
+
+    @Test
+    void callerWithCanTraceRoleIsAuthorized() {
+        var authentication = new TestingAuthenticationToken(
+                "test-user", "n/a", List.of(new SimpleGrantedAuthority("ROLE_CAN_TRACE")));
+
+        assertTrue(new CorrelationTraceGatewayFilter().callerHasCanTraceRole(authentication));
+    }
+
+    @Test
+    void callerWithoutCanTraceRoleIsNotAuthorized() {
+        var authentication = new TestingAuthenticationToken(
+                "test-user", "n/a", List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+
+        assertFalse(new CorrelationTraceGatewayFilter().callerHasCanTraceRole(authentication));
+    }
+
+    @Test
+    void nullAuthenticationIsNotAuthorized() {
+        assertFalse(new CorrelationTraceGatewayFilter().callerHasCanTraceRole(null));
     }
 }
