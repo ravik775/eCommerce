@@ -76,7 +76,12 @@ public class ForceTraceFilter extends OncePerRequestFilter {
                 .build());
     }
 
-    private boolean callerHasCanTraceRole() {
+    // Package-private + static (was private instance): reused as-is by
+    // SpanAttributeEnrichmentFilter so both filters make the exact same
+    // force-trace authorization decision from one place — duplicating
+    // this check instead of sharing it would let the two silently drift
+    // (e.g. one filter honoring a role change the other doesn't).
+    static boolean callerHasCanTraceRole() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null) {
             return false;
