@@ -63,8 +63,21 @@ spec:
             - { name: config, mountPath: /etc/tempo }
             - { name: data, mountPath: /tmp/tempo }
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            # Found live: Tempo's own internal distributor->ingester gRPC
+            # pipeline (both run in this same single-binary process,
+            # 127.0.0.1:9095) was timing out under the old 500m/512Mi
+            # limit - "pusher failed to consume trace data ... code =
+            # DeadlineExceeded" - meaning most spans from real requests
+            # never made it into storage, and search queries (sharing the
+            # same resource-starved process) returned "No data" even for
+            # {} (match everything). Requests bumped modestly (node has
+            # ample CPU-request headroom, ~35% memory-request headroom
+            # per `kubectl describe node`); limits raised more generously
+            # so Tempo can actually burst under this session's load
+            # instead of being throttled into missing its own internal
+            # health checks.
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1Gi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
