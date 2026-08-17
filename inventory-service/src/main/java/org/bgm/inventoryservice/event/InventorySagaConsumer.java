@@ -3,6 +3,7 @@ package org.bgm.inventoryservice.event;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bgm.common.audit.AuditLogger;
 import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.common.event.schema.EventType;
@@ -70,6 +71,16 @@ public class InventorySagaConsumer {
                 InventoryReservedEvent reserved = new InventoryReservedEvent(
                         UUID.randomUUID().toString(), event.orderId(), items, Instant.now().toString());
                 eventPublisher.publish(EventType.INVENTORY_RESERVED, event.orderId(), reserved.eventId(), reserved);
+                // ADR-0059: this method previously had zero log output on
+                // its success path — only the failure branch below ever
+                // logged anything (found while auditing the same
+                // silent-success class of gap ADR-0054 fixed for
+                // notification-service). The only prior evidence a
+                // reservation succeeded was the outbox_event DB row.
+                AuditLogger.log("INVENTORY_RESERVED", AuditLogger.fields()
+                        .with("orderId", event.orderId())
+                        .with("itemCount", event.items().size())
+                        .build());
             } catch (InsufficientStockException | ProductNotFoundException e) {
                 InventoryReservationFailedEvent failed = new InventoryReservationFailedEvent(
                         UUID.randomUUID().toString(), event.orderId(), e.getMessage(), Instant.now().toString());
@@ -112,6 +123,10 @@ public class InventorySagaConsumer {
                 InventoryReleasedEvent released = new InventoryReleasedEvent(
                         UUID.randomUUID().toString(), event.orderId(), items, Instant.now().toString());
                 eventPublisher.publish(EventType.INVENTORY_RELEASED, event.orderId(), released.eventId(), released);
+                AuditLogger.log("INVENTORY_RELEASED", AuditLogger.fields()
+                        .with("orderId", event.orderId())
+                        .with("itemCount", items.size())
+                        .build());
             }
 
             markProcessed(event.eventId());
