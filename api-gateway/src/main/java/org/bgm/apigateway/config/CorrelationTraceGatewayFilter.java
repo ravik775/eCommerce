@@ -92,7 +92,29 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         // ADR-0052: always generated here, never read from the incoming
         // request — see the class Javadoc for why this differs from
         // correlationId's client-honoring behavior above.
-        String traceId = UUID.randomUUID().toString();
+        // ADR-0052 (2026-08-17 update): the real OTel trace ID, not an
+        // unrelated random UUID. This filter deliberately runs late
+        // enough (see getOrder() below, ADR-0043) that Span.current() is
+        // WebFlux's own real span for this request, not a no-op — so its
+        // SpanContext's trace ID is the same one Tempo will show for
+        // this request's span tree. Found live, investigating the
+        // MDC-key-collision incident this same update fixes: the
+        // previous random-UUID approach meant X-Trace-Id and Tempo's
+        // actual trace ID were two unrelated values by design, and
+        // Micrometer Tracing's own MDC handling was already silently
+        // leaking the REAL trace ID into logs downstream whenever its
+        // scope outlived our custom value's — i.e., the system was
+        // already accidentally behaving like this, just unreliably.
+        // Making it deliberate: one ID, usable to search both Tempo and
+        // Loki, for the synchronous portion of any request. Falls back
+        // to a random UUID only if there's genuinely no valid span
+        // (getInvalid() is all zeros) — shouldn't happen here given the
+        // filter ordering, but never propagate a meaningless ID if it
+        // somehow does.
+        String otelTraceId = Span.current().getSpanContext().getTraceId();
+        String traceId = io.opentelemetry.api.trace.TraceId.isValid(otelTraceId)
+                ? otelTraceId
+                : UUID.randomUUID().toString();
 
         ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)

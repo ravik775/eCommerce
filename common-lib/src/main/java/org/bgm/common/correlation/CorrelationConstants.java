@@ -11,7 +11,26 @@ public final class CorrelationConstants {
     public static final String TRACE_ID_HEADER = "X-Trace-Id";
 
     public static final String MDC_CORRELATION_ID_KEY = "correlationId";
-    public static final String MDC_TRACE_ID_KEY = "traceId";
+    // ADR-0052 (2026-08-17 incident correction): was "traceId" — a real,
+    // live-reproduced MDC key collision with Micrometer Tracing's own
+    // MDCScopeDecorator (common-lib depends on micrometer-tracing-bridge-otel),
+    // which automatically manages MDC["traceId"] itself, tied to the
+    // REAL OTel span context, activated on every auto-instrumented
+    // Observation scope (e.g. an outbound RestTemplate call). Found live:
+    // payment-service's X-Trace-Id was correctly present in MDC right up
+    // until its one synchronous outbound call (OrderServiceClient — the
+    // saga's only cross-service HTTP call, ADR-0007) — logging inside
+    // that call bisected the exact loss point to inside
+    // restTemplate.exchange() itself. Micrometer's own scope push/pop
+    // around that call clobbered our key, since it owns the SAME MDC
+    // key name for a completely different purpose (the real OTel trace,
+    // which this project has always deliberately kept distinct from
+    // this application-level X-Trace-Id — see ADR-0023). This collision
+    // was latent since ADR-0032 first added Micrometer Tracing — it
+    // simply had no way to manifest until ADR-0052 started actually
+    // writing an application value into MDC["traceId"] (the old
+    // correlationId-only propagation never touched this key at all).
+    public static final String MDC_TRACE_ID_KEY = "appTraceId";
 
     // ADR-0032: the order ID is a separate, additional log field, not a
     // substitute for correlationId — the original correlation ID now

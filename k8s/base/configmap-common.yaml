@@ -27,7 +27,18 @@ data:
   SPRING_CLOUD_DISCOVERY_ENABLED: "false"
   # ADR-0032: orderId added as a separate field, not a correlationId
   # substitute — see CorrelationConstants.MDC_ORDER_ID_KEY's Javadoc.
-  LOGGING_PATTERN_LEVEL: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-},orderId=%X{orderId:-}]"
+  #
+  # ADR-0052 (2026-08-17 incident correction): appTraceId added as its
+  # own field, NOT folded into the existing traceId=%X{traceId} above —
+  # that field is Micrometer Tracing's own MDC key, tied to the real
+  # OTel span (Loki's derivedFields regex, grafana-datasources ConfigMap,
+  # depends on it staying exactly this format to jump into Tempo). Our
+  # application-level X-Trace-Id (gateway-generated, propagated across
+  # the async saga) lives under a deliberately different key —
+  # CorrelationConstants.MDC_TRACE_ID_KEY's Javadoc has the full
+  # root-cause story on why reusing "traceId" for both was a real,
+  # live-reproduced collision.
+  LOGGING_PATTERN_LEVEL: "%5p [correlationId=%X{correlationId:-},traceId=%X{traceId:-},appTraceId=%X{appTraceId:-},orderId=%X{orderId:-}]"
   SPRING_KAFKA_BOOTSTRAP_SERVERS: "host.docker.internal:9092"
   SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
   SPRING_KAFKA_CONSUMER_PROPERTIES_SPRING_JSON_TRUSTED_PACKAGES: "org.bgm.*"
