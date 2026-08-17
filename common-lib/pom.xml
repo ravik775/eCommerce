@@ -165,6 +165,36 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- ADR-0066 (doc/adr/ADR-0066-outbox-pattern-deduplication.md):
+             AbstractOutboxEvent/AbstractOutboxPoller/AbstractEventPublisher
+             need JPA (@MappedSuperclass, JpaRepository) and Kafka
+             (KafkaTemplate/ProducerRecord) types to compile against —
+             same "provided" pattern as tomcat-embed-core/reactor-netty-http
+             above: every consuming service (order/inventory/payment-service)
+             already brings the real implementations transitively via
+             spring-boot-starter-data-jpa and spring-kafka, so this isn't a
+             new runtime dependency anywhere, only a compile-time one here. -->
+        <dependency>
+            <groupId>jakarta.persistence</groupId>
+            <artifactId>jakarta.persistence-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-jpa</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
