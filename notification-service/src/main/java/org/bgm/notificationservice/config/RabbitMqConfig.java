@@ -86,6 +86,16 @@ public class RabbitMqConfig {
                                           Jackson2JsonMessageConverter converter) {
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
         template.setMessageConverter(converter);
+        // ADR-0057: this bean is fully custom (not Boot's auto-configured
+        // one), so the standard spring.rabbitmq.template.observation-enabled
+        // property has no effect on it — same class of gap the
+        // auto-startup comment below already documents for the listener
+        // factory. Without this, NotificationEventConsumer.dispatch()'s
+        // rabbitTemplate.convertAndSend(...) call creates no span, so
+        // there is nothing for NotificationDispatchWorker's downstream
+        // work (or OrderCorrelationScope's attribute stamping, ADR-0056)
+        // to attach to in Tempo — set explicitly here instead.
+        template.setObservationEnabled(true);
         return template;
     }
 
@@ -105,6 +115,12 @@ public class RabbitMqConfig {
         // has to be applied explicitly here — found via the same hermetic
         // test that caught the EventSchemaValidator bean gap.
         factory.setAutoStartup(autoStartup);
+        // ADR-0057: same gap as the RabbitTemplate above — this factory
+        // being custom means spring.rabbitmq.listener.simple.observation-enabled
+        // has no effect either. Without this, NotificationDispatchWorker's
+        // @RabbitListener invocations create no span, matching the exact
+        // Kafka-listener gap this same ADR fixes on the Kafka side.
+        factory.setObservationEnabled(true);
 
         RepublishMessageRecoverer recoverer = new RepublishMessageRecoverer(
                 rabbitTemplate, dispatchDlxName, dispatchDlqName);

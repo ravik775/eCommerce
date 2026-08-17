@@ -42,6 +42,21 @@ data:
   SPRING_KAFKA_BOOTSTRAP_SERVERS: "host.docker.internal:9092"
   SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET: "earliest"
   SPRING_KAFKA_CONSUMER_PROPERTIES_SPRING_JSON_TRUSTED_PACKAGES: "org.bgm.*"
+  # ADR-0057: without this, @KafkaListener invocations and KafkaTemplate
+  # sends create no Micrometer Observation/OTel span at all — confirmed
+  # live via Tempo: a real order's saga showed payment-service correctly
+  # processing it (same correlationId/appTraceId in Loki/DB) but zero
+  # spans in Tempo for that work, while payment-service's own inbound
+  # HTTP endpoints DID export fine. OrderCorrelationScope's span-attribute
+  # stamping (ADR-0056) was already correct — it just had no real span to
+  # attach to on a Kafka listener thread, only OTel's no-op span. No
+  # manual KafkaTemplate/listener-container-factory beans exist anywhere
+  # in this codebase (confirmed via repo search) — every service uses
+  # Spring Boot's auto-configured ones, so these two properties alone are
+  # sufficient; no code change needed for the Kafka side (contrast with
+  # RabbitMQ below, which does need one).
+  SPRING_KAFKA_LISTENER_OBSERVATION_ENABLED: "true"
+  SPRING_KAFKA_TEMPLATE_OBSERVATION_ENABLED: "true"
   SPRING_RABBITMQ_HOST: "rabbitmq"
   SPRING_RABBITMQ_PORT: "5672"
   SPRING_DATA_REDIS_HOST: "redis"
