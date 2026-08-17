@@ -167,14 +167,118 @@ data:
           traceId       = "",
         }
       }
-      stage.regex {
-        expression = "auditEvent=(?P<auditEvent>\\S+)(?:.*orderId=(?P<orderId>\\S+))?(?:.*customerId=(?P<customerId>\\S+))?"
+      // ADR-0065 (2026-08-17 21:45 IST correction): this regex+labels
+      // pair used to run unconditionally against every line from every
+      // pod, same as the bracket-prefix stage above it — genuinely
+      // fine for the bracket-prefix stage (that pattern is specific
+      // enough it won't false-match), but "auditEvent=" as a bare
+      // substring proved NOT specific enough: once something (Loki's
+      // own error responses, echoed back into Alloy's error log when a
+      // bad line got rejected) started producing log text containing
+      // the literal substring "auditEvent=", this stage matched THAT
+      // too, extracting garbage as the auditEvent label value and
+      // writing it back to Loki — which any future scrape of that same
+      // error text would match again. Now scoped inside the same
+      // stage.match guard as the new fields below, for the same reason.
+      stage.match {
+        selector = "{job=\"loki.source.kubernetes.pods\", app!=\"alloy\", app!=\"loki\"} |= \"] AUDIT \""
+        stage.regex {
+          expression = "auditEvent=(?P<auditEvent>\\S+)(?:.*orderId=(?P<orderId>\\S+))?(?:.*customerId=(?P<customerId>\\S+))?"
+        }
+        stage.labels {
+          values = {
+            auditEvent = "",
+            orderId    = "",
+            customerId = "",
+          }
+        }
       }
-      stage.labels {
-        values = {
-          auditEvent = "",
-          orderId    = "",
-          customerId = "",
+
+      // ADR-0065 (doc/adr/ADR-0065-loki-audit-field-visibility-gap.md):
+      // found live — AuditLogger.Fields.with(...) call sites across
+      // every service pass many more keys than the three promoted above
+      // (transactionId, amount, itemCount, reason, type, path, method,
+      // requiredRoles, authorities, detail, principal, totalAmount —
+      // see every AuditLogger.log(...) call site) — none of those were
+      // ever parsed out by this pipeline, so they only ever existed as
+      // raw, unsearchable text inside the log line, never visible as a
+      // Field in Grafana's log-details panel (confirmed live: a
+      // PAYMENT_SUCCESS line's Fields panel showed orderId/auditEvent
+      // but not transactionId/amount, despite the code logging all
+      // four the same way). Deliberately NOT added as more stage.labels
+      // entries above: those are already correlationId/traceId/orderId/
+      // customerId/auditEvent, a small, bounded, already-accepted set —
+      // adding transactionId (a UUID, effectively unique per line) or
+      // amount (near-continuous) as Loki LABELS would blow up the
+      // series/index cardinality Loki labels are meant to stay small
+      // for. stage.structured_metadata (schema v13, already in use
+      // above) is the correct mechanism instead: per-line, searchable,
+      // shown in Grafana's Fields panel, but not part of the stream
+      // index — no cardinality cost.
+      // ADR-0065 (2026-08-17 21:45 IST correction): the original
+      // selector, `{job="loki.source.kubernetes.pods"} |= "auditEvent="`,
+      // matched every pod's logs including Alloy's own — and once Alloy
+      // logged a "failed to decode logfmt" error, that error message
+      // ITSELF contained the literal text "auditEvent=" (quoting the
+      // line it failed on), which matched the same selector again on
+      // the next scrape cycle, got fed back into stage.logfmt, failed
+      // again, logged another error containing "auditEvent=" — a
+      // genuine feedback loop, confirmed live via a burst of repeating
+      // "logfmt syntax error" lines immediately after the first
+      // rollout. Fixed by excluding Alloy's own logs (`app!="alloy"`)
+      // and requiring the actual AUDIT-logger line shape (`" AUDIT :"`,
+      // the literal logger-name token AuditLogger's dedicated
+      // `LoggerFactory.getLogger("AUDIT")` produces in every service's
+      // stdout, not just any line containing the substring
+      // "auditEvent=" — which, as this incident proved, isn't unique
+      // to genuine audit lines once error-message text is in the mix).
+      // ADR-0065 (2026-08-17 22:10 IST second correction): stage.logfmt
+      // applied to the WHOLE line (as the first version of this stage
+      // did) doesn't work the way the rest of this comment block
+      // originally assumed — Go's logfmt decoder isn't a tolerant,
+      // skip-what-doesn't-match parser; it hard-fails the ENTIRE decode
+      // the moment it hits something structurally invalid, and this
+      // line has plenty of that before the real auditEvent=... portion
+      // even starts (the comma-separated `[correlationId=X,traceId=Y,
+      // orderId=Z]` bracket, the padded logger-name field's run of
+      // spaces). Confirmed live: after fixing the selector bug above,
+      // every genuinely-matched AUDIT line still produced a "failed to
+      // decode logfmt" error — not a feedback loop this time, a hard
+      // parse failure on legitimate input. Replaced with the same
+      // stage.regex approach already proven to work for auditEvent/
+      // orderId/customerId above — one regex with optional named
+      // capture groups per field (a field simply won't be present in
+      // the capture for events that don't log it, which is fine —
+      // stage.structured_metadata only attaches non-empty values).
+      stage.match {
+        selector = "{job=\"loki.source.kubernetes.pods\", app!=\"alloy\", app!=\"loki\"} |= \"] AUDIT \""
+        stage.regex {
+          // Anchored on the mandatory "auditEvent=" every AUDIT-logger
+          // line has (same anchor the working stage above uses) — every
+          // field below is chained off it as an optional trailing
+          // group. Without a mandatory anchor, a regex built entirely
+          // of optional groups trivially matches an empty string at
+          // position 0 and never actually searches the line — a real
+          // bug caught before deploying this version (Go's RE2 regex
+          // returns the leftmost match, and an all-optional pattern's
+          // leftmost match is the empty match at the very start).
+          expression = "auditEvent=\\S+(?:.*\\stransactionId=(?P<transactionId>\\S+))?(?:.*\\stotalAmount=(?P<totalAmount>\\S+))?(?:.*\\samount=(?P<amount>\\S+))?(?:.*\\sitemCount=(?P<itemCount>\\S+))?(?:.*\\sreason=(?P<reason>\\S+))?(?:.*\\stype=(?P<type>\\S+))?(?:.*\\spath=(?P<path>\\S+))?(?:.*\\smethod=(?P<method>\\S+))?(?:.*\\srequiredRoles=(?P<requiredRoles>\\S+))?(?:.*\\sauthorities=(?P<authorities>\\S+))?(?:.*\\sdetail=(?P<detail>\\S+))?(?:.*\\sprincipal=(?P<principal>\\S+))?"
+        }
+        stage.structured_metadata {
+          values = {
+            transactionId = "",
+            amount        = "",
+            totalAmount   = "",
+            itemCount     = "",
+            reason        = "",
+            type          = "",
+            path          = "",
+            method        = "",
+            requiredRoles = "",
+            authorities   = "",
+            detail        = "",
+            principal     = "",
+          }
         }
       }
     }
