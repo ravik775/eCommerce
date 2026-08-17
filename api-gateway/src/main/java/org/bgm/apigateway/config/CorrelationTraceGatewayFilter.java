@@ -85,6 +85,40 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // ADR-0055 (2026-08-17): the entire body is deferred inside
+        // Mono.defer(...) — it used to run eagerly, as plain synchronous
+        // Java, during Spring Cloud Gateway's filter-chain ASSEMBLY
+        // (FilteringWebHandler calling every GlobalFilter's .filter()
+        // method in a loop to build the composed Mono chain). At that
+        // point Span.current() reads whatever OTel Context happens to be
+        // on the ThreadLocal for the thread doing that assembly work —
+        // which is NOT guaranteed to be this request's span, because
+        // Reactor's automatic context propagation
+        // (Hooks.enableAutomaticContextPropagation(), backed by
+        // io.micrometer:context-propagation) only re-threads the correct
+        // ThreadLocal Context around operators Reactor itself invokes at
+        // SUBSCRIPTION time — not around a plain method call made during
+        // chain construction. Found live: a real request's returned
+        // X-Trace-Id was a fallback random UUID instead of the real OTel
+        // trace ID, non-deterministically — this exact gap is documented
+        // upstream (spring-projects/spring-boot#38615,
+        // spring-cloud/spring-cloud-gateway#3904,
+        // open-telemetry-java-instrumentation#10648 — all describe
+        // Span.current()/tracer.currentSpan() being null or wrong inside
+        // Spring Cloud Gateway's GlobalFilter chain or other WebFlux code
+        // that doesn't defer to subscription time).
+        //
+        // Wrapping in Mono.defer(...) moves every line below —
+        // including the Span.current() read — into a Supplier that
+        // Reactor invokes as an actual operator callback at subscription
+        // time, which IS inside the properly-propagated window per the
+        // same sources. This is the documented-correct fix, not a
+        // workaround: read span/context state only from code Reactor
+        // itself calls, never from code that runs during Mono assembly.
+        return Mono.defer(() -> doFilter(exchange, chain));
+    }
+
+    private Mono<Void> doFilter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
 
         String correlationId = firstNonBlank(
@@ -108,13 +142,28 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         // Making it deliberate: one ID, usable to search both Tempo and
         // Loki, for the synchronous portion of any request. Falls back
         // to a random UUID only if there's genuinely no valid span
-        // (getInvalid() is all zeros) — shouldn't happen here given the
-        // filter ordering, but never propagate a meaningless ID if it
+        // (getInvalid() is all zeros) — ADR-0055's Mono.defer fix makes
+        // this the true exception path instead of a frequent silent
+        // occurrence; still never propagate a meaningless ID if it
         // somehow does.
         String otelTraceId = Span.current().getSpanContext().getTraceId();
-        String traceId = io.opentelemetry.api.trace.TraceId.isValid(otelTraceId)
-                ? otelTraceId
-                : UUID.randomUUID().toString();
+        boolean otelTraceIdValid = io.opentelemetry.api.trace.TraceId.isValid(otelTraceId);
+        String traceId = otelTraceIdValid ? otelTraceId : UUID.randomUUID().toString();
+        if (!otelTraceIdValid) {
+            // ADR-0055: visibility, not just a silent degrade — this
+            // branch firing at all (post-fix) means Reactor's context
+            // propagation still didn't have a valid span for this
+            // request by the time this ran, worth knowing the actual
+            // live frequency of rather than only discovering it by
+            // manually diffing a captured X-Trace-Id against Tempo.
+            log.warn("[correlationId={}] no valid OTel span at trace-ID generation time — falling back to a "
+                            + "random UUID ({}) instead of a real Tempo-searchable trace ID for {} {}",
+                    correlationId, traceId, request.getMethod(), request.getPath());
+            AuditLogger.log("TRACE_ID_FALLBACK_UUID", AuditLogger.fields()
+                    .with("correlationId", correlationId)
+                    .with("path", request.getPath().value())
+                    .build());
+        }
 
         ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)

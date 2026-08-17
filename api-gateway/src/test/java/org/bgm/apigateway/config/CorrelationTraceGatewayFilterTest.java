@@ -123,4 +123,33 @@ class CorrelationTraceGatewayFilterTest {
         assertTrue(outboundTraceId.get() != null && !outboundTraceId.get().isBlank(),
                 "a trace ID must always be generated, even with no incoming header at all");
     }
+
+    // ADR-0055: in this unit-test harness there is no OTel SDK wired up
+    // at all, so Span.current() is always OpenTelemetry's own no-op
+    // Span.getInvalid() — meaning every filter() call in every test above
+    // already exercises the fallback path. This test locks down that the
+    // fallback firing is genuinely observable (an AUDIT log line), not
+    // just a correctly-generated-but-silent UUID — the whole point of
+    // Option 3's visibility fix. Uses a Logback ListAppender rather than
+    // asserting on log text, so it's checking the mechanism (a line was
+    // emitted with the expected structured fields), not string-matching
+    // brittle formatting.
+    @Test
+    void fallbackToRandomUuidIsAuditLogged() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(CorrelationTraceGatewayFilter.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/order"));
+
+            new CorrelationTraceGatewayFilter().filter(exchange, (ServerWebExchange ex) -> Mono.empty()).block();
+
+            boolean fallbackWarned = appender.list.stream()
+                    .anyMatch(event -> event.getFormattedMessage().contains("no valid OTel span"));
+            assertTrue(fallbackWarned, "a random-UUID fallback must log a WARN, not degrade silently");
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
 }
