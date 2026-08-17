@@ -33,3 +33,11 @@ Also confirmed by reading `CorrelationTraceFilter`: the `X-Trace-Id` response he
 - ADR-0023: the original correlationId/traceId distinction this fix respects rather than blurs.
 - ADR-0052/0056: the mechanisms that make appTraceId consistently available to surface here.
 - The Order Trace Explorer dashboard (this session, k8s/base/grafana.yaml): where the copied Saga ID is meant to be pasted.
+
+### 2026-08-17 17:55 IST update — dashboard-side gap closed too (Option 1)
+
+Follow-up review of the Order Trace Explorer dashboard found it didn't fully deliver on this ADR's own premise: its `$search` variable treated `orderId` and `appTraceId` as symmetric, equal-weight alternatives (`span.orderId="$search" || span.appTraceId="$search"`) — searching by order ID never surfaced the corresponding `appTraceId` back to the user, and nothing framed `appTraceId` as *the* authoritative identifier the way the UI now does (this ADR's original decision) — the exact same friction this ADR fixed in the checkout UI was still present one click away, in the dashboard meant to be its destination.
+
+**Fix** (`k8s/base/grafana.yaml`): added a new top panel, "Resolved Saga ID (appTraceId)" — a Loki query for the first log line matching `$search`, run through Grafana's built-in **Extract fields** transformation (regexp source, `appTraceId=(?<appTraceId>[a-f0-9-]+)` and `orderId=(?<orderId>[0-9]+)`) into a two-column table. No new datasource or plugin — reuses the Loki datasource already wired up. Whatever you searched with, this panel now resolves and displays the canonical Saga ID.
+
+Verified live: the extraction regex was tested directly against a real captured log line for order 82 and correctly produced `ecfbd4b1-8aed-4fbb-a4ed-c12289b39282` — the same value independently confirmed via Loki as that order's `appTraceId`. Dashboard confirmed provisioned without error via Grafana's own API (`GET /api/search`, `GET /api/dashboards/uid/...`) after redeploy, all 7 panels present.

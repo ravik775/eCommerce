@@ -16,6 +16,9 @@
 #   NAMESPACE     default ecom
 #   LOKI_URL      default http://localhost:3100 (port-forward svc/loki 3100:3100)
 #   TEMPO_URL     default http://localhost:3200 (port-forward svc/tempo 3200:3200)
+#   GRAFANA_URL   default http://localhost:3000 (port-forward svc/grafana 3000:3000)
+#   GRAFANA_USER / GRAFANA_PASSWORD  default admin/admin (matches k8s/base's
+#                 grafana-admin-secret defaults for this dev cluster)
 #   KEYCLOAK_GATEWAY_CLIENT_SECRET
 #                 same var scripts/render-realm-config.sh reads from .env.
 #                 Auth-dependent scenarios (5+) are skipped with WARN, not
@@ -28,6 +31,9 @@ set -uo pipefail
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8090}"
 NAMESPACE="${NAMESPACE:-ecom}"
+GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
+GRAFANA_USER="${GRAFANA_USER:-admin}"
+GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-admin}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -f "$ROOT_DIR/.env" ]; then
@@ -476,6 +482,32 @@ check_inventory_reserved_audit_log() {
 }
 
 # ---------------------------------------------------------------------------
+# 13. ADR-0061 regression guard: the Order Trace Explorer dashboard must
+#     actually be provisioned in the live Grafana instance, not just present
+#     as a ConfigMap that never got applied/picked up — this is exactly the
+#     kind of gap that's invisible from a `git log` or a passing pod-Ready
+#     check. WARN, not FAIL, if Grafana itself is unreachable (credentials
+#     may differ per environment) — but FAIL if Grafana answers and the
+#     dashboard is genuinely missing, since that's a real regression.
+# ---------------------------------------------------------------------------
+check_order_trace_dashboard_provisioned() {
+  local resp code
+  resp="$(curl -s -m 10 -w '\n%{http_code}' -u "$GRAFANA_USER:$GRAFANA_PASSWORD" \
+    -G "$GRAFANA_URL/api/search" --data-urlencode "query=Order Trace Explorer")"
+  code="$(echo "$resp" | tail -1)"
+  resp="$(echo "$resp" | sed '$d')"
+  if [ "$code" != "200" ]; then
+    echo "Grafana unreachable or auth failed at $GRAFANA_URL (HTTP $code) — check GRAFANA_URL/GRAFANA_USER/GRAFANA_PASSWORD"
+    return 2
+  fi
+  if [[ "$resp" != *'"title":"Order Trace Explorer"'* ]]; then
+    echo "Order Trace Explorer dashboard not found in Grafana's dashboard search — was k8s/base/grafana.yaml applied and grafana redeployed?"
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Run everything
 # ---------------------------------------------------------------------------
 log "target: gateway=$GATEWAY_URL keycloak=$KEYCLOAK_URL namespace=$NAMESPACE"
@@ -499,6 +531,7 @@ run_check "Gateway overwrites client-supplied X-Trace-Id"            check_gatew
 run_check "X-Trace-Id is a real OTel trace ID (ADR-0055)"            check_trace_id_is_real_otel_id
 run_check "Tempo span attributes present per service (ADR-0056)"     check_tempo_span_attributes
 run_check "Inventory reservation audit log present (ADR-0059)"       check_inventory_reserved_audit_log
+run_check "Order Trace Explorer dashboard provisioned (ADR-0061)"    check_order_trace_dashboard_provisioned
 
 echo
 echo "=== Summary ==="
