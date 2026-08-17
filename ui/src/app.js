@@ -50,13 +50,59 @@ function refFrom(res) {
   return res.headers.get('X-Correlation-Id') || 'unknown';
 }
 
-// Display-only shortening (first segment of the UUID) for the success
-// message's "trace ref" — deliberately NOT used for error messages
-// (refFrom above), which stay full-length so they remain directly
-// paste-able into a Loki/Tempo query. A short prefix is unique enough
-// for a human glancing at a success toast, not for a log search.
-function shortRef(ref) {
-  return ref === 'unknown' ? ref : ref.split('-')[0];
+// The authoritative cross-saga correlation ID (appTraceId internally —
+// see CorrelationConstants.MDC_TRACE_ID_KEY's Javadoc). This response
+// header IS that value: CorrelationTraceFilter puts the same string into
+// both the response's X-Trace-Id header and MDC's appTraceId key for
+// every servlet backend, and OrderCorrelationScope carries it unchanged
+// through every Kafka/RabbitMQ hop of the saga afterward. Deliberately
+// distinct from X-Correlation-Id (refFrom above) — that one is a
+// per-call idempotency-style ref; this one is the single ID genuinely
+// consistent end-to-end across the whole order lifecycle, and the only
+// one worth showing a customer-support-facing "search by this" value.
+function traceIdFrom(res) {
+  return res.headers.get('X-Trace-Id') || 'unknown';
+}
+
+// Full value only, deliberately never truncated. A previous version of
+// this UI showed a shortened prefix ("trace ref: e58e539c") that looked
+// like a useful reference but couldn't actually be pasted into a Tempo
+// or Loki search (both need an exact match) — found live, reported as
+// "not useful information to search in Grafana." A full, copyable value
+// with a clear label is the fix; the dashboard link below tells the
+// reader exactly where to paste it.
+function renderSagaIdNotice(container, orderId, traceId) {
+  container.textContent = '';
+  const line1 = document.createElement('p');
+  line1.textContent = `Order #${orderId} placed — payment processing.`;
+  container.appendChild(line1);
+
+  const line2 = document.createElement('p');
+  const label = document.createElement('strong');
+  label.textContent = 'Saga ID (Trace ID): ';
+  line2.appendChild(label);
+  const code = document.createElement('code');
+  code.textContent = traceId;
+  line2.appendChild(code);
+
+  if (traceId !== 'unknown' && navigator.clipboard) {
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.textContent = 'Copy';
+    copyBtn.style.marginLeft = '0.5em';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(traceId).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      });
+    });
+    line2.appendChild(copyBtn);
+  }
+  container.appendChild(line2);
+
+  const line3 = document.createElement('p');
+  line3.textContent = 'Search this in Grafana → Order Trace Explorer dashboard to see the full request history.';
+  container.appendChild(line3);
 }
 
 async function loadMe() {
@@ -315,12 +361,10 @@ async function checkout() {
     const order = await res.json();
     // Order #<id> is the real, short, database-unique identifier
     // (auto-increment primary key) — the one to quote for "my order."
-    // The correlation ref (a full UUID, kept intact everywhere else —
-    // logs, response headers, Tempo/Loki lookups — since shortening
-    // *that* would risk losing traceability) is shown only as a short,
-    // clearly-separate "trace ref" prefix for support use, not
-    // presented as if it were the order's own identifier.
-    status.textContent = `Order #${order.id} placed (trace ref: ${shortRef(ref)}) — payment processing.`;
+    // The saga/trace ID (traceIdFrom above) is the one worth showing in
+    // full for support/search purposes — see renderSagaIdNotice's
+    // Javadoc for why a truncated ref was actively unhelpful here.
+    renderSagaIdNotice(status, order.id, traceIdFrom(res));
     cart.length = 0;
     renderCart();
     await loadMyOrders();
