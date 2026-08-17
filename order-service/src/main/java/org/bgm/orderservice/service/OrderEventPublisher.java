@@ -45,6 +45,8 @@ public class OrderEventPublisher {
         // access to this MDC context, so the value has to be persisted
         // to survive that hop.
         event.setCorrelationId(MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
+        // ADR-0052: same reasoning as correlationId above.
+        event.setTraceId(MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY));
         try {
             event.setPayload(objectMapper.writeValueAsString(payload));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {

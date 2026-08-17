@@ -1,14 +1,21 @@
 package org.bgm.apigateway.config;
 
+import org.bgm.common.correlation.CorrelationConstants;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.Ordered;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -71,5 +78,49 @@ class CorrelationTraceGatewayFilterTest {
     @Test
     void nullAuthenticationIsNotAuthorized() {
         assertFalse(new CorrelationTraceGatewayFilter().callerHasCanTraceRole(null));
+    }
+
+    // ADR-0052: found live — the UI sent its own client-generated
+    // X-Trace-Id, fixed per browser tab, and this filter honored it
+    // verbatim (the same firstNonBlank fallback X-Correlation-Id still
+    // legitimately uses). A client-supplied value for something this
+    // project treats as an authoritative correlation anchor is exactly
+    // the kind of input that shouldn't be trusted. These lock down that
+    // the outgoing request always carries a fresh, gateway-generated
+    // value regardless of what the client sent — X-Correlation-Id is
+    // deliberately unaffected (see the class Javadoc for why that one
+    // stays client-honorable).
+    @Test
+    void clientSuppliedTraceIdIsNeverHonored() {
+        String spoofedTraceId = "attacker-supplied-value";
+        AtomicReference<String> outboundTraceId = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/order")
+                        .header(CorrelationConstants.TRACE_ID_HEADER, spoofedTraceId));
+
+        new CorrelationTraceGatewayFilter().filter(exchange, (ServerWebExchange ex) -> {
+            outboundTraceId.set(ex.getRequest().getHeaders().getFirst(CorrelationConstants.TRACE_ID_HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertNotEquals(spoofedTraceId, outboundTraceId.get(),
+                "a client-supplied X-Trace-Id must never reach downstream services unchanged");
+        assertNotEquals(spoofedTraceId,
+                exchange.getResponse().getHeaders().getFirst(CorrelationConstants.TRACE_ID_HEADER),
+                "a client-supplied X-Trace-Id must never be echoed back on the response either");
+    }
+
+    @Test
+    void traceIdIsGeneratedEvenWhenClientSendsNone() {
+        AtomicReference<String> outboundTraceId = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/order"));
+
+        new CorrelationTraceGatewayFilter().filter(exchange, (ServerWebExchange ex) -> {
+            outboundTraceId.set(ex.getRequest().getHeaders().getFirst(CorrelationConstants.TRACE_ID_HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertTrue(outboundTraceId.get() != null && !outboundTraceId.get().isBlank(),
+                "a trace ID must always be generated, even with no incoming header at all");
     }
 }

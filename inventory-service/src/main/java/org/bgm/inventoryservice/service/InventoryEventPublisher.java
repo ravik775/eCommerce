@@ -34,6 +34,8 @@ public class InventoryEventPublisher {
         event.setPublished(false);
         event.setCreatedAt(Instant.now());
         event.setCorrelationId(MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
+        // ADR-0052: same reasoning as correlationId above.
+        event.setTraceId(MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY));
         try {
             event.setPayload(objectMapper.writeValueAsString(payload));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {

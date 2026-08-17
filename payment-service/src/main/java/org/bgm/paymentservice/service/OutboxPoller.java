@@ -38,6 +38,12 @@ public class OutboxPoller {
                             CorrelationConstants.MDC_CORRELATION_ID_KEY,
                             event.getCorrelationId().getBytes(StandardCharsets.UTF_8)));
                 }
+                // ADR-0052: same mechanism as correlationId above.
+                if (event.getTraceId() != null) {
+                    record.headers().add(new RecordHeader(
+                            CorrelationConstants.MDC_TRACE_ID_KEY,
+                            event.getTraceId().getBytes(StandardCharsets.UTF_8)));
+                }
                 kafkaTemplate.send(record).get();
                 event.setPublished(true);
                 event.setPublishedAt(Instant.now());

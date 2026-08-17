@@ -34,9 +34,10 @@ public class OrderSagaConsumer {
     @Transactional
     public void onPaymentSuccess(
             String message,
-            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -49,9 +50,10 @@ public class OrderSagaConsumer {
     @Transactional
     public void onPaymentFailed(
             String message,
-            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -65,9 +67,10 @@ public class OrderSagaConsumer {
     @Transactional
     public void onInventoryReservationFailed(
             String message,
-            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
         InventoryReservationFailedEvent event = objectMapper.readValue(message, InventoryReservationFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }

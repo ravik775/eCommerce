@@ -38,4 +38,10 @@ public class OutboxEvent {
     // OutboxPoller for how this survives the hop to Kafka as a message
     // header, and OrderEventPublisher for where it's captured.
     private String correlationId;
+
+    // ADR-0052: same mechanism as correlationId above, for the
+    // gateway-generated X-Trace-Id — see OrderCorrelationScope's
+    // Javadoc for why this flows across the async saga even though the
+    // real OTel span tree doesn't.
+    private String traceId;
 }

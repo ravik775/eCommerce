@@ -30,6 +30,20 @@ import java.util.UUID;
  * calls that bypass the gateway — see common-lib's CorrelationTraceFilter).
  * X-Correlation-Id is generated here too if the caller didn't supply one.
  * Both are always echoed on the response, success or failure.
+ * <p>
+ * ADR-0052 (2026-08-17): X-Trace-Id is now UNCONDITIONALLY generated here
+ * — a client-supplied value is never honored, unlike X-Correlation-Id.
+ * Found live: the UI generated its own random X-Trace-Id client-side
+ * (fixed per browser tab) and the gateway trusted it verbatim via the
+ * same firstNonBlank fallback X-Correlation-Id still legitimately uses.
+ * That's a real gap for a value this project treats as an authoritative
+ * cross-service correlation anchor — a client can set it to anything,
+ * including a fabricated or reused value, which is exactly the kind of
+ * input a security-relevant investigation identifier must not trust.
+ * X-Correlation-Id keeps the old behavior deliberately: it's closer to
+ * an idempotency-style client-supplied token (same accepted pattern as
+ * Idempotency-Key elsewhere in this codebase), not the thing this system
+ * treats as the ground-truth trace anchor.
  */
 @Component
 public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
@@ -75,8 +89,10 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
 
         String correlationId = firstNonBlank(
                 request.getHeaders().getFirst(CorrelationConstants.CORRELATION_ID_HEADER));
-        String traceId = firstNonBlank(
-                request.getHeaders().getFirst(CorrelationConstants.TRACE_ID_HEADER));
+        // ADR-0052: always generated here, never read from the incoming
+        // request — see the class Javadoc for why this differs from
+        // correlationId's client-honoring behavior above.
+        String traceId = UUID.randomUUID().toString();
 
         ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)

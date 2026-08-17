@@ -41,14 +41,15 @@ public class NotificationEventConsumer {
     @Transactional
     public void onPaymentSuccess(
             String message,
-            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
         // Last hop of the order saga (order-service -> inventory-service ->
         // payment-service already do this) — was missing here, so a
         // saga's log trail went cold right before the notification step,
         // the one place an operator would most want to confirm delivery
         // actually happened for a given order.
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -61,9 +62,10 @@ public class NotificationEventConsumer {
     @Transactional
     public void onPaymentFailed(
             String message,
-            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
