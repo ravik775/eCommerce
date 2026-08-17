@@ -24,6 +24,14 @@ Four changes, all confirmed low-risk for this dev/test cluster:
 - These are resource/timing/config changes, not application logic — no new unit tests apply. Verification is operational: the next multi-service redeploy should be observably faster and not require a restart, which will be confirmed the next time one happens (this ADR's changes take effect on the very next rollout).
 - `SPRING_MAIN_LAZY_INITIALIZATION` is the one genuinely behavior-affecting change (not just resource tuning) — worth a live smoke check after redeploy: place an order and confirm the full saga still completes normally (a lazily-initialized `@KafkaListener` bean, for instance, must still register correctly on first message, not silently no-op).
 
+### 2026-08-17 16:05 IST correction — the namespace ResourceQuota, missed on the first pass
+
+Applying the 5 services' CPU limit raise immediately broke `payment-service` and `notification-service` — both dropped to **zero pods scheduled at all**, not just slow. `kubectl get events` showed the real cause: `exceeded quota: ecom-quota, requested: limits.cpu=1, used: limits.cpu=8, limited: limits.cpu=8`. `k8s/base/resource-limits.yaml`'s `ecom-quota` (a deliberate, incident-driven guardrail from a real prior Docker Desktop hang — documented in that file's own header) was already at its full `8`-core ceiling *before* this ADR's change, mostly from idle capacity on over-provisioned observability services (`tempo` alone held a full `1000m` limit while `docker stats` showed it using ~0.1% of it). Should have checked this quota before raising the 5 services' individual limits; didn't, and it silently broke two services' ability to schedule at all — caught only via the regression script's next run (`FAIL: payment-service actuator health — no pod found`, `FAIL: notification-service actuator health — no pod found`), not proactively.
+
+**Fix**: raised `ecom-quota`'s `limits.cpu` from `8` to `10` — Docker Desktop's VM has 12 CPUs total, so this still leaves 2 full cores of headroom for everything outside this namespace's quota entirely (kube-system, SPIRE, ingress-nginx, and the standalone Postgres/Kafka/Keycloak containers, which aren't K8s pods at all). Not an unbounded increase — the same real-VM-capacity reasoning the original `8` used, just recomputed against what the 5-service CPU raise actually needed.
+
+**Process lesson**: a namespace-wide `ResourceQuota` is exactly the kind of cross-cutting constraint that a per-service resource change can silently violate without any error until `kubectl apply` — should be checked explicitly before raising any individual container's limits in a quota-constrained namespace, not discovered after the fact via a failed rollout.
+
 ## Consequences
 
 - Positive: removes the actual bottleneck (CPU throttling during cold start) rather than just accommodating slower startups — should reduce both total redeploy time and unnecessary restarts.

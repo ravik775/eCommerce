@@ -32,7 +32,26 @@ spec:
     # standalone Postgres/Kafka/Keycloak containers run outside this
     # namespace/quota and need their own share of that same VM memory).
     requests.memory: 5Gi
-    limits.cpu: "8"
+    # ADR-0058 (2026-08-17 15:20 IST correction): raised from 8. Found
+    # live: raising the 5 app services' individual CPU limits (500m ->
+    # 1000m, this same ADR) to fix cold-start throttling immediately
+    # broke payment-service/notification-service scheduling entirely —
+    # "exceeded quota: ecom-quota, requested: limits.cpu=1, used:
+    # limits.cpu=8" — the namespace was already at its full 8-core
+    # ceiling *before* this change (mostly idle capacity on
+    # over-provisioned observability services: tempo alone held a full
+    # 1000m limit while using ~0.1% of it). Should have checked this
+    # quota before raising individual limits; didn't, and it broke two
+    # services' ability to schedule at all until caught and fixed here.
+    # Raised to 10, not higher: Docker Desktop's VM has 12 CPUs total:
+    # this leaves 2 full cores of headroom for everything that runs
+    # outside this namespace's quota entirely on the same node/VM —
+    # kube-system pods, the SPIRE agent/server, ingress-nginx, and the
+    # standalone Postgres/Kafka/Keycloak containers (not K8s pods at
+    # all, per this file's own original LOCAL-DEV DEVIATION comment
+    # elsewhere in this repo) — not an unbounded increase, a deliberate
+    # one with the same real-VM-capacity reasoning the original 8 used.
+    limits.cpu: "10"
     limits.memory: 8Gi
     pods: "30"
 ---
