@@ -165,6 +165,21 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
                     .build());
         }
 
+        // ADR-0056: the gateway's own span never carried these as
+        // attributes at all — confirmed live via Tempo's own tag index
+        // (GET /api/search/tags), which had zero correlationId/orderId/
+        // appTraceId entries for api-gateway despite order-service
+        // already having them (SpanAttributeEnrichmentFilter is a
+        // Servlet Filter, and this gateway is WebFlux — structurally
+        // never covered). Both values are already computed locally here,
+        // so stamping them costs nothing extra. orderId is deliberately
+        // NOT set here — the gateway never learns it; order-service
+        // assigns it after this span has already started.
+        if (otelTraceIdValid) {
+            Span.current().setAttribute(CorrelationConstants.MDC_CORRELATION_ID_KEY, correlationId);
+            Span.current().setAttribute(CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
+        }
+
         ServerHttpRequest.Builder requestBuilder = request.mutate()
                 .header(CorrelationConstants.CORRELATION_ID_HEADER, correlationId)
                 .header(CorrelationConstants.TRACE_ID_HEADER, traceId);

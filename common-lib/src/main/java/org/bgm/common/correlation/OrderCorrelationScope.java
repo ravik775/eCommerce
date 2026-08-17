@@ -1,5 +1,6 @@
 package org.bgm.common.correlation;
 
+import io.opentelemetry.api.trace.Span;
 import org.slf4j.MDC;
 
 /**
@@ -68,7 +69,36 @@ public final class OrderCorrelationScope implements AutoCloseable {
         if (traceId != null && !traceId.isBlank()) {
             MDC.put(CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
         }
+        // ADR-0056: also stamp the currently active OTel span, not just
+        // MDC. Found live, checking Tempo's own tag index directly: every
+        // Kafka/RabbitMQ-listener-triggered service in this saga
+        // (inventory-service, payment-service, notification-service)
+        // sets its correlation context EXCLUSIVELY through this method,
+        // never through their own inbound HTTP request — meaning
+        // SpanAttributeEnrichmentFilter (a Servlet HTTP Filter) can
+        // structurally never enrich their spans, no matter how correctly
+        // it's deployed, because a Kafka/RabbitMQ listener invocation
+        // never passes through any Servlet filter chain at all. This is
+        // the one call site every one of those services' correlation
+        // logic already funnels through, so it's the correct place to
+        // fix it for all of them at once, rather than trying to hook
+        // every listener-container/Observation-API integration
+        // individually. Span.current() here resolves to whatever span
+        // (if any) is active for this thread's execution — a real Kafka
+        // listener span if that instrumentation is active, or a
+        // harmless no-op span otherwise (setAttribute on a no-op span is
+        // a documented no-op, not an error).
+        Span span = Span.current();
+        setSpanAttributeIfPresent(span, CorrelationConstants.MDC_CORRELATION_ID_KEY, resolvedCorrelationId);
+        setSpanAttributeIfPresent(span, CorrelationConstants.MDC_ORDER_ID_KEY, String.valueOf(orderId));
+        setSpanAttributeIfPresent(span, CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
         return new OrderCorrelationScope(previousCorrelationId, previousOrderId, previousTraceId);
+    }
+
+    private static void setSpanAttributeIfPresent(Span span, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            span.setAttribute(key, value);
+        }
     }
 
     @Override
