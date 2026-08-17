@@ -454,6 +454,28 @@ check_tempo_span_attributes() {
 }
 
 # ---------------------------------------------------------------------------
+# 12. ADR-0059 regression guard: InventorySagaConsumer used to have zero log
+#     output on its success path — only the outbox_event DB row proved a
+#     reservation happened. Asserts the new AuditLogger line actually shows
+#     up in Loki for this run's real order, not just that the code compiles.
+# ---------------------------------------------------------------------------
+check_inventory_reserved_audit_log() {
+  [ -z "$CHECKOUT_ORDER_ID" ] && { echo "no order from checkout-saga check to check"; return 2; }
+  local loki_url="${LOKI_URL:-http://localhost:3100}"
+  local start_ns end_ns resp
+  start_ns=$(( $(date +%s) * 1000000000 - 300000000000 ))
+  end_ns=$(( $(date +%s) * 1000000000 + 60000000000 ))
+  resp="$(curl -s -m 10 -G "$loki_url/loki/api/v1/query_range" \
+    --data-urlencode "query={app=\"inventory-service\"} |= \"INVENTORY_RESERVED\" |= \"orderId=$CHECKOUT_ORDER_ID\"" \
+    --data-urlencode "start=$start_ns" --data-urlencode "end=$end_ns" --data-urlencode "limit=5")"
+  if [[ "$resp" != *'"result":[{'* ]]; then
+    echo "no INVENTORY_RESERVED audit log line in Loki for orderId=$CHECKOUT_ORDER_ID — is inventory-service running the ADR-0059+ image?"
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Run everything
 # ---------------------------------------------------------------------------
 log "target: gateway=$GATEWAY_URL keycloak=$KEYCLOAK_URL namespace=$NAMESPACE"
@@ -476,6 +498,7 @@ run_check "Trace propagation: appTraceId visible in Loki across saga" check_trac
 run_check "Gateway overwrites client-supplied X-Trace-Id"            check_gateway_overwrites_trace_id
 run_check "X-Trace-Id is a real OTel trace ID (ADR-0055)"            check_trace_id_is_real_otel_id
 run_check "Tempo span attributes present per service (ADR-0056)"     check_tempo_span_attributes
+run_check "Inventory reservation audit log present (ADR-0059)"       check_inventory_reserved_audit_log
 
 echo
 echo "=== Summary ==="
