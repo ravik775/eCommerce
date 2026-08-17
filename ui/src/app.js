@@ -11,26 +11,27 @@ let me = null;
 let forceTrace = false; // ADR-0032: CAN_TRACE-gated Settings toggle
 
 // ADR-0023: correlation ID and trace ID are distinct, with distinct
-// uniqueness guarantees. This UI is the true entry point for end-to-end
-// tracing (the gateway is reactive/WebFlux and doesn't run
-// CorrelationTraceFilter, which only auto-registers into servlet-based
-// backend services) — without the browser setting these, each backend
-// service independently generated its own random one per request,
-// making a single user action impossible to trace across hops. traceId
-// is fixed for this whole page session (one browser tab = one trace);
-// correlationId is fresh per individual API call. Both are honored by
-// CorrelationTraceFilter if present on the incoming request rather than
-// generated fresh, so setting them here is what actually makes them
-// consistent downstream.
-const TRACE_ID = crypto.randomUUID();
-
+// uniqueness guarantees. correlationId is fresh per individual API call
+// and honored by CorrelationTraceFilter on servlet-based backends if
+// present on the incoming request rather than generated fresh, so
+// setting it here is what makes it consistent downstream.
+//
+// ADR-0052 (2026-08-17): this UI no longer sends X-Trace-Id at all. The
+// gateway now always generates its own X-Trace-Id server-side
+// (CorrelationTraceGatewayFilter) and never honors a client-supplied
+// value — a deliberate security fix, since a client-controlled trace ID
+// let a caller inject arbitrary values into the server's own log
+// correlation. A client-generated TRACE_ID sent here would therefore be
+// silently discarded by the gateway on every request — pure dead weight
+// that only invited confusion (comparing this UI's own value against
+// what actually shows up in Loki/Tempo never matched). Removed rather
+// than left in place unused.
 function apiFetch(url, options = {}) {
   return fetch(url, {
     ...options,
     headers: {
       ...options.headers,
       'X-Correlation-Id': crypto.randomUUID(),
-      'X-Trace-Id': TRACE_ID,
       // ADR-0032: only sent when the CAN_TRACE-gated toggle is on —
       // absent (not "false") otherwise, so a session without the role
       // never even has the option to influence backend sampling.

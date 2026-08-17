@@ -76,3 +76,11 @@ This does **not** create a real, unified OTel span tree across the async Kafka s
 ## Related (update)
 
 - Additionally related: ADR-0032 (the actual origin of the collision — `micrometer-tracing-bridge-otel` was added there, three ADRs before the field it would eventually collide with existed)
+
+### 2026-08-17 12:55 IST update — UI stopped sending X-Trace-Id entirely
+
+Live Grafana-based trace-hierarchy walkthrough for a real order surfaced a leftover inconsistency: `ui/src/app.js` still generated a client-side `TRACE_ID` (`crypto.randomUUID()`, fixed per page session) and sent it as `X-Trace-Id` on every `apiFetch` call — a holdover from before this ADR's original decision, when the UI was the intended entry point for trace-ID generation (see the pre-ADR-0052 comment that used to sit above it). Since the gateway now *always* overwrites `X-Trace-Id` server-side and never honors a client-supplied value (this ADR's core security fix), that client-generated ID was pure dead weight — silently discarded on every request, and a source of real confusion for anyone comparing the UI's own value against what actually appears in Loki/Tempo (they never matched).
+
+**Fix**: removed the `TRACE_ID` constant and the `X-Trace-Id` header entirely from `apiFetch`; `X-Correlation-Id` (still genuinely client-generated, fresh per call, and honored by `CorrelationTraceFilter` — a distinct field from `appTraceId`, per this ADR's original decision) is unaffected. Comment above `apiFetch` rewritten to explain the removal rather than describe now-false behavior.
+
+No backend change, no redeploy needed beyond the `ui` image — this only removes an already-ignored client header.
