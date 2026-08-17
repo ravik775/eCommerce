@@ -1,5 +1,7 @@
 package org.bgm.apigateway.config;
 
+import io.micrometer.context.ContextSnapshot;
+import io.micrometer.context.ContextSnapshotFactory;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
@@ -83,39 +85,51 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
                 }
             };
 
+    // ADR-0055 (2026-08-17 update): built once — a shared, stateless
+    // factory for taking ContextSnapshots, not per-request state.
+    private static final ContextSnapshotFactory CONTEXT_SNAPSHOT_FACTORY = ContextSnapshotFactory.builder().build();
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        // ADR-0055 (2026-08-17): the entire body is deferred inside
-        // Mono.defer(...) — it used to run eagerly, as plain synchronous
-        // Java, during Spring Cloud Gateway's filter-chain ASSEMBLY
-        // (FilteringWebHandler calling every GlobalFilter's .filter()
-        // method in a loop to build the composed Mono chain). At that
-        // point Span.current() reads whatever OTel Context happens to be
-        // on the ThreadLocal for the thread doing that assembly work —
-        // which is NOT guaranteed to be this request's span, because
-        // Reactor's automatic context propagation
-        // (Hooks.enableAutomaticContextPropagation(), backed by
-        // io.micrometer:context-propagation) only re-threads the correct
-        // ThreadLocal Context around operators Reactor itself invokes at
-        // SUBSCRIPTION time — not around a plain method call made during
-        // chain construction. Found live: a real request's returned
-        // X-Trace-Id was a fallback random UUID instead of the real OTel
-        // trace ID, non-deterministically — this exact gap is documented
-        // upstream (spring-projects/spring-boot#38615,
+        // ADR-0055 (2026-08-17, original fix): deferring the body into
+        // Mono.defer(...) moved the Span.current() read from Spring Cloud
+        // Gateway's filter-chain ASSEMBLY phase (FilteringWebHandler
+        // calling every GlobalFilter's .filter() method synchronously to
+        // build the composed Mono) to subscription time — the documented
+        // fix for spring-projects/spring-boot#38615,
         // spring-cloud/spring-cloud-gateway#3904,
-        // open-telemetry-java-instrumentation#10648 — all describe
-        // Span.current()/tracer.currentSpan() being null or wrong inside
-        // Spring Cloud Gateway's GlobalFilter chain or other WebFlux code
-        // that doesn't defer to subscription time).
+        // open-telemetry-java-instrumentation#10648.
         //
-        // Wrapping in Mono.defer(...) moves every line below —
-        // including the Span.current() read — into a Supplier that
-        // Reactor invokes as an actual operator callback at subscription
-        // time, which IS inside the properly-propagated window per the
-        // same sources. This is the documented-correct fix, not a
-        // workaround: read span/context state only from code Reactor
-        // itself calls, never from code that runs during Mono assembly.
-        return Mono.defer(() -> doFilter(exchange, chain));
+        // ADR-0055 (2026-08-17 correction): that alone still wasn't
+        // reliable — found live, the fallback UUID kept firing some of
+        // the time even after the Mono.defer fix. Root cause: Mono.defer
+        // depends on Reactor's *automatic* context propagation
+        // (Hooks.enableAutomaticContextPropagation()) having already
+        // re-threaded the correct OTel Context onto whatever thread our
+        // lambda happens to run on, by the time it runs — a timing
+        // assumption, not a guarantee, and evidently one that doesn't
+        // always hold under this gateway's actual load/scheduling
+        // pattern.
+        //
+        // Fixed properly here by not trusting that automatic bridge at
+        // all: Mono.deferContextual gives direct access to Reactor's own
+        // ContextView, which Reactor unconditionally carries correctly
+        // through the whole reactive chain regardless of thread hops —
+        // that guarantee is Reactor's own core contract, independent of
+        // the ThreadLocal-bridge timing race. ContextSnapshotFactory
+        // (io.micrometer:context-propagation, already on the classpath
+        // via micrometer-tracing-bridge-otel) explicitly restores every
+        // registered ThreadLocalAccessor — including the OTel Context
+        // accessor micrometer-tracing-bridge-otel itself registers under
+        // the hood — from that ContextView, for the duration of the
+        // try-with-resources scope. Span.current()/Context.current()
+        // inside that scope are now reading a value we explicitly and
+        // verifiably restored, not one we're hoping was already there.
+        return Mono.deferContextual(contextView -> {
+            try (ContextSnapshot.Scope ignored = CONTEXT_SNAPSHOT_FACTORY.captureFrom(contextView).setThreadLocals()) {
+                return doFilter(exchange, chain);
+            }
+        });
     }
 
     private Mono<Void> doFilter(ServerWebExchange exchange, GatewayFilterChain chain) {
