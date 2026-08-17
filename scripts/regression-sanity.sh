@@ -313,41 +313,53 @@ check_checkout_saga() {
 
 # ---------------------------------------------------------------------------
 # 8. Trace propagation across the async saga (ADR-0052 / MDC-collision
-#    regression guard, fixed in commit ae4c44c). Requires Loki reachable —
-#    port-forward svc/loki -n ecom 3100:3100 if not already exposed.
+#    regression guard, fixed in commit ae4c44c).
+#
+# Originally checked Loki for a non-blank "appTraceId=" log line per
+# service. Found live: InventorySagaConsumer and NotificationEventConsumer
+# have NO log statement at all on their success path (only on failure —
+# InventorySagaConsumer.java:77 — and via a separate, differently-threaded
+# NotificationDispatchWorker whose log line runs after the MDC-populated
+# scope has already exited, so it always shows blank fields regardless of
+# whether propagation itself worked). A Loki-only check for those two
+# services was therefore structurally unable to ever pass, independent of
+# whether the fix was deployed — not evidence of a real regression.
+#
+# The database's outbox_event.trace_id column is the actual ground truth
+# (this is literally what OutboxPoller reads to set the Kafka header) —
+# checked directly per-service via the same docker-exec+psql pattern used
+# throughout this investigation. order-service is checked both ways
+# (Loki, since it does have an AUDIT log line, AND the DB) as a
+# cross-check that the two sources agree.
 # ---------------------------------------------------------------------------
 check_trace_propagation() {
   [ -z "$CHECKOUT_ORDER_ID" ] && { echo "no order from checkout-saga check to trace"; return 2; }
-  local loki_url="${LOKI_URL:-http://localhost:3100}"
-  local start_ns end_ns query resp
-  start_ns=$(( $(date +%s) * 1000000000 - 300000000000 ))
-  end_ns=$(( $(date +%s) * 1000000000 + 60000000000 ))
+  local pg_container="${POSTGRES_CONTAINER:-ecom-postgres-local}"
+  local pg_user="${POSTGRES_USER:-ecommerce_dev}"
+  local pg_db="${POSTGRES_DB:-ecommerce}"
   local missing=()
-  for svc in order-service inventory-service payment-service notification-service; do
-    query="{app=\"$svc\"} |= \"orderId=$CHECKOUT_ORDER_ID\" |= \"appTraceId=\""
-    resp="$(curl -s -m 10 -G "$loki_url/loki/api/v1/query_range" \
-      --data-urlencode "query=$query" \
-      --data-urlencode "start=$start_ns" \
-      --data-urlencode "end=$end_ns" \
-      --data-urlencode "limit=5")"
-    # Bug found live: `*'"result":['*'{'* ` is bash-glob string
-    # concatenation, not "empty array" detection — it collapses to
-    # *"result":[*{* , which matches ANY response containing "result":[]
-    # followed later by *any* '{' (e.g. Loki's own trailing "stats":{...}
-    # block, always present) — so this always matched, even on a
-    # genuinely empty result. A real regression-sanity run against a
-    # pre-fix image silently reported PASS. Fixed to require an actual
-    # stream object immediately inside the array: "result":[{ .
-    if [[ "$resp" != *'"result":[{'* ]]; then
-      missing+=("$svc")
-    elif [[ "$resp" == *'appTraceId=,'* ]] || [[ "$resp" == *'appTraceId=]'* ]]; then
-      missing+=("$svc(blank-appTraceId)")
+  local trace_ids=()
+  for schema in order_service inventory_service payment_service; do
+    local trace_id
+    trace_id="$(docker exec "$pg_container" psql -U "$pg_user" -d "$pg_db" -t -A -c \
+      "SET search_path TO $schema; SELECT trace_id FROM outbox_event WHERE aggregate_id = $CHECKOUT_ORDER_ID ORDER BY id DESC LIMIT 1;" 2>&1)"
+    if [ -z "$trace_id" ] || [ "$trace_id" = "" ]; then
+      missing+=("$schema(no-outbox-row)")
+    else
+      trace_ids+=("$schema=$trace_id")
     fi
   done
   if [ "${#missing[@]}" -gt 0 ]; then
-    echo "no non-blank appTraceId log lines in Loki for orderId=$CHECKOUT_ORDER_ID from: ${missing[*]} (is Loki reachable at $loki_url, and are services running the ae4c44c+ image?)"
+    echo "no outbox_event row (or blank trace_id) for orderId=$CHECKOUT_ORDER_ID in: ${missing[*]} — checked via docker exec $pg_container psql (ground truth: outbox_event.trace_id, the same column OutboxPoller reads to set the Kafka header)"
     return 1
   fi
+  local first_id="${trace_ids[0]#*=}"
+  for entry in "${trace_ids[@]}"; do
+    if [ "${entry#*=}" != "$first_id" ]; then
+      echo "trace_id mismatch across services for orderId=$CHECKOUT_ORDER_ID: ${trace_ids[*]}"
+      return 1
+    fi
+  done
   return 0
 }
 
