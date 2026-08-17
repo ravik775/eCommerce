@@ -2,11 +2,14 @@ package org.bgm.notificationservice.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.bgm.common.audit.AuditLogger;
 import org.bgm.common.correlation.CorrelationConstants;
 import org.bgm.common.correlation.OrderCorrelationScope;
 import org.bgm.notificationservice.dispatch.NotificationDispatchMessage;
 import org.bgm.notificationservice.model.ProcessedEvent;
 import org.bgm.notificationservice.repository.ProcessedEventRepository;
+import org.slf4j.MDC;
+import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -54,6 +57,10 @@ public class NotificationEventConsumer {
                 return;
             }
             dispatch(event.orderId(), NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION);
+            AuditLogger.log("NOTIFICATION_DISPATCH_QUEUED", AuditLogger.fields()
+                    .with("orderId", event.orderId())
+                    .with("type", NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION)
+                    .build());
             markProcessed(event.eventId());
         }
     }
@@ -70,14 +77,42 @@ public class NotificationEventConsumer {
                 return;
             }
             dispatch(event.orderId(), NotificationDispatchMessage.TYPE_PAYMENT_FAILED);
+            AuditLogger.log("NOTIFICATION_DISPATCH_QUEUED", AuditLogger.fields()
+                    .with("orderId", event.orderId())
+                    .with("type", NotificationDispatchMessage.TYPE_PAYMENT_FAILED)
+                    .build());
             markProcessed(event.eventId());
         }
     }
 
+    // Carries correlationId/orderId/appTraceId across the Kafka-consumer-
+    // thread -> RabbitMQ-listener-thread hop as message headers — the same
+    // problem OutboxPoller already solved for the Kafka hop (ADR-0052),
+    // applied here because MDC is thread-local and NotificationDispatchWorker
+    // runs on a different thread than this method. Read from MDC (not
+    // passed as a parameter) since this runs inside OrderCorrelationScope,
+    // which is the single source of truth for "what's the current
+    // correlation context" — matches how OutboxPoller itself reads MDC
+    // rather than threading the values through every call site.
     private void dispatch(long orderId, String type) {
         NotificationDispatchMessage dispatchMessage =
                 new NotificationDispatchMessage(orderId, type, Instant.now().toString());
-        rabbitTemplate.convertAndSend(dispatchExchange, dispatchRoutingKey, dispatchMessage);
+        String correlationId = MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY);
+        String orderIdHeader = MDC.get(CorrelationConstants.MDC_ORDER_ID_KEY);
+        String appTraceId = MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY);
+        rabbitTemplate.convertAndSend(dispatchExchange, dispatchRoutingKey, dispatchMessage, message -> {
+            MessageProperties props = message.getMessageProperties();
+            if (correlationId != null && !correlationId.isBlank()) {
+                props.setHeader(CorrelationConstants.MDC_CORRELATION_ID_KEY, correlationId);
+            }
+            if (orderIdHeader != null && !orderIdHeader.isBlank()) {
+                props.setHeader(CorrelationConstants.MDC_ORDER_ID_KEY, orderIdHeader);
+            }
+            if (appTraceId != null && !appTraceId.isBlank()) {
+                props.setHeader(CorrelationConstants.MDC_TRACE_ID_KEY, appTraceId);
+            }
+            return message;
+        });
     }
 
     private boolean alreadyProcessed(String eventId) {
