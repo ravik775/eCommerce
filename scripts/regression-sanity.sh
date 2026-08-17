@@ -330,7 +330,15 @@ check_trace_propagation() {
       --data-urlencode "start=$start_ns" \
       --data-urlencode "end=$end_ns" \
       --data-urlencode "limit=5")"
-    if [[ "$resp" != *'"result":['*'{'* ]]; then
+    # Bug found live: `*'"result":['*'{'* ` is bash-glob string
+    # concatenation, not "empty array" detection — it collapses to
+    # *"result":[*{* , which matches ANY response containing "result":[]
+    # followed later by *any* '{' (e.g. Loki's own trailing "stats":{...}
+    # block, always present) — so this always matched, even on a
+    # genuinely empty result. A real regression-sanity run against a
+    # pre-fix image silently reported PASS. Fixed to require an actual
+    # stream object immediately inside the array: "result":[{ .
+    if [[ "$resp" != *'"result":[{'* ]]; then
       missing+=("$svc")
     elif [[ "$resp" == *'appTraceId=,'* ]] || [[ "$resp" == *'appTraceId=]'* ]]; then
       missing+=("$svc(blank-appTraceId)")
