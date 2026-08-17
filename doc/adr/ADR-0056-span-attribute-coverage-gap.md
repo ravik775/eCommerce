@@ -1,6 +1,6 @@
 # ADR-0056: Close the real span-attribute coverage gap (ADR-0053 was incomplete)
 
-**Status**: Accepted
+**Status**: Accepted. api-gateway's remaining gap (spans not reaching Tempo at all for proxied routes, discovered during ADR-0063's investigation) closed by [ADR-0064](./ADR-0064-otel-java-agent-for-gateway-proxied-spans.md) (2026-08-17 21:05 IST) — live-verified via real Tempo trace data, not just theoretically fixed. This ADR's own `orderId`-attribute regression check was also corrected to stop checking api-gateway for an attribute it deliberately never sets by design (see this ADR's Decision below).
 **Date**: 2026-08-17 13:55 IST
 **Deciders**: Solution/Security Architect
 

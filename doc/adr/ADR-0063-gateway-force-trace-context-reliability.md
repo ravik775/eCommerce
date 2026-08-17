@@ -1,6 +1,6 @@
 # ADR-0063: Fix unreliable Span.current() in the gateway's X-Force-Trace branch (partial — root cause turned out deeper)
 
-**Status**: Partially accepted — see the 18:45 IST correction below. The `Span.current()` reliability fix is real and kept; the original item ("gateway spans missing for authenticated/proxied routes") remains open, root-caused to a deeper Spring Cloud Gateway proxied-route span-lifecycle gap, not fixed here.
+**Status**: Accepted, with the deeper gap this ADR's own investigation surfaced now closed by [ADR-0064](./ADR-0064-otel-java-agent-for-gateway-proxied-spans.md) (2026-08-17 21:05 IST) — see the 18:45 IST correction below for the root-cause finding, and ADR-0064 for the fix and its live verification (3/3 force-traced proxied-route requests confirmed with real `api-gateway` spans in Tempo). The `Span.current()` reliability fix in this ADR is real and kept regardless.
 **Date**: 2026-08-17 18:20 IST
 **Deciders**: Solution/Security Architect
 

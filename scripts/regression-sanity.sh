@@ -443,8 +443,17 @@ check_tempo_span_attributes() {
     return 1
   fi
 
+  # ADR-0064: api-gateway deliberately dropped from this loop — it never
+  # sets an orderId span attribute by design (documented in ADR-0056's
+  # Decision: "the gateway never learns it; order-service assigns it
+  # after this span has already started"), so checking for
+  # span.orderId=... here was never a fair test of api-gateway
+  # specifically. Its span *existence* for a force-traced request is
+  # now separately and correctly verified by check_gateway_force_trace_span
+  # (ADR-0063), which is the right check for what the gateway actually
+  # guarantees.
   local missing=()
-  for svc in inventory-service payment-service notification-service api-gateway; do
+  for svc in inventory-service payment-service notification-service; do
     resp="$(curl -s -m 10 -G "$tempo_url/api/search" \
       --data-urlencode "q={resource.service.name=\"$svc\" && span.orderId=\"$CHECKOUT_ORDER_ID\"}" \
       --data-urlencode "start=$start_s" --data-urlencode "end=$end_s" --data-urlencode "limit=5")"

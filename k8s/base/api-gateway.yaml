@@ -50,11 +50,65 @@ spec:
             # binding tree (Spring only auto-discovers end_session_endpoint
             # via issuer-uri, which this deployment deliberately doesn't use).
             - { name: KEYCLOAK_LOGOUT_URI, value: "http://localhost:8090/realms/ecom/protocol/openid-connect/logout" }
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=75.0" }
+            # ADR-0064: -javaagent added here, not baked into the image's
+            # ENV JAVA_TOOL_OPTIONS, so this override lives with the rest
+            # of this deployment's config rather than silently changing
+            # behavior for anyone reusing the image directly.
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=75.0 -javaagent:/otel/opentelemetry-javaagent.jar" }
             # ADR-0002: enables common-lib's SPIFFE mTLS auto-config —
             # this pod's proxy client now presents a client SVID and
             # verifies the peer's SVID on every outbound route call.
             - { name: SPIFFE_MTLS_ENABLED, value: "true" }
+            # ADR-0064: the gateway is the only service where library
+            # instrumentation (common-lib's TracingAutoConfiguration,
+            # micrometer-tracing-bridge-otel) provably fails to export
+            # spans for proxied routes (ADR-0055/ADR-0056/ADR-0063's live
+            # findings) — switched to the OpenTelemetry Java agent here
+            # only, not across all 5 services, since the other 4 are
+            # already confirmed working under library instrumentation
+            # and the agent adds real operational surface (startup
+            # overhead, another artifact to version) not worth taking on
+            # where nothing is broken.
+            #
+            # MANAGEMENT_TRACING_ENABLED=false overrides common-config's
+            # "true" for this pod specifically — disables common-lib's
+            # TracingAutoConfiguration AND Spring Boot Actuator's own
+            # tracing auto-configuration (both gated by this same real
+            # Spring Boot property), preventing an in-process OTel SDK
+            # from registering as GlobalOpenTelemetry and conflicting
+            # with the one the agent already installed at JVM bootstrap
+            # (before the Spring context even starts) — OTel explicitly
+            # does not support two SDKs both calling
+            # GlobalOpenTelemetry.set(...) in the same JVM.
+            - { name: MANAGEMENT_TRACING_ENABLED, value: "false" }
+            - { name: OTEL_SERVICE_NAME, value: "api-gateway" }
+            - { name: OTEL_TRACES_EXPORTER, value: "otlp" }
+            # Same Tempo endpoint as MANAGEMENT_OTLP_TRACING_ENDPOINT in
+            # common-config, but the agent wants the collector root (it
+            # appends /v1/traces itself) and an explicit protocol, not
+            # the full path common-lib's manual exporter config used.
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://tempo:4318" }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
+            # This project doesn't use OTel for metrics/logs (Prometheus
+            # scraping + Loki cover those independently) — without this,
+            # the agent would also try to export both via OTLP, which
+            # nothing here consumes.
+            - { name: OTEL_METRICS_EXPORTER, value: "none" }
+            - { name: OTEL_LOGS_EXPORTER, value: "none" }
+            # AlwaysOnSampler equivalent — see
+            # otel-agent-extension's ForceTraceAndErrorSamplingExtension
+            # Javadoc for why the export-time filter needs every span
+            # actually recorded first.
+            - { name: OTEL_TRACES_SAMPLER, value: "always_on" }
+            - { name: OTEL_JAVAAGENT_EXTENSIONS, value: "/otel/otel-agent-extension.jar" }
+            # Read by ForceTraceAndErrorSamplingExtension via OTel's
+            # standard config-property naming convention (env var
+            # OTEL_TRACES_SUCCESS_SAMPLE_RATE -> property key
+            # otel.traces.success.sample.rate) — same value as
+            # TRACING_SUCCESS_SAMPLE_RATE in common-config, kept in sync
+            # by hand since the agent and common-lib read different
+            # property namespaces.
+            - { name: OTEL_TRACES_SUCCESS_SAMPLE_RATE, value: "0.1" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
             # ADR-0058: see order-service.yaml's identical comment — same

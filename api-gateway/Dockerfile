@@ -19,10 +19,22 @@ COPY order-service order-service
 COPY payment-service payment-service
 COPY service-discovery service-discovery
 COPY user-service user-service
+COPY otel-agent-extension otel-agent-extension
 RUN --mount=type=cache,target=/root/.m2 \
-    chmod +x mvnw && ./mvnw -q -pl api-gateway -am package -DskipTests -Dassembly.skipAssembly=true
+    chmod +x mvnw && ./mvnw -q -pl api-gateway,otel-agent-extension -am package -DskipTests -Dassembly.skipAssembly=true
 RUN mkdir -p /workspace/extracted && \
     java -Djarmode=layertools -jar /workspace/api-gateway/target/api-gateway-*.jar extract --destination /workspace/extracted
+# ADR-0064: fetched via Maven (not curl'd from GitHub releases) so it
+# goes through the same dependency-resolution/checksum path as every
+# other jar this build already trusts, and reuses the .m2 cache mount
+# instead of needing separate network egress rules for GitHub.
+RUN --mount=type=cache,target=/root/.m2 \
+    mkdir -p /workspace/otel && \
+    ./mvnw -q dependency:copy \
+      -Dartifact=io.opentelemetry.javaagent:opentelemetry-javaagent:2.10.0:jar \
+      -DoutputDirectory=/workspace/otel && \
+    mv /workspace/otel/opentelemetry-javaagent-2.10.0.jar /workspace/otel/opentelemetry-javaagent.jar && \
+    cp /workspace/otel-agent-extension/target/otel-agent-extension-*.jar /workspace/otel/otel-agent-extension.jar
 
 FROM eclipse-temurin:21-jre-alpine
 RUN addgroup -S spring && adduser -S spring -G spring
@@ -31,6 +43,14 @@ COPY --from=build /workspace/extracted/dependencies/ ./
 COPY --from=build /workspace/extracted/spring-boot-loader/ ./
 COPY --from=build /workspace/extracted/snapshot-dependencies/ ./
 COPY --from=build /workspace/extracted/application/ ./
+# ADR-0064: the OTel Java agent + its extension jar for this service
+# only — bytecode-instruments reactor-netty/Spring Cloud Gateway
+# directly, closing the proxied-route span gap library instrumentation
+# (ADR-0055/ADR-0056/ADR-0063) couldn't reliably close. Read-only,
+# owned by root, readable by the spring user — consistent with
+# readOnlyRootFilesystem: true in k8s/base/api-gateway.yaml.
+COPY --from=build /workspace/otel/opentelemetry-javaagent.jar /otel/opentelemetry-javaagent.jar
+COPY --from=build /workspace/otel/otel-agent-extension.jar /otel/otel-agent-extension.jar
 USER spring:spring
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0"
 EXPOSE 8080

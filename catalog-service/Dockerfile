@@ -19,6 +19,7 @@ COPY order-service order-service
 COPY payment-service payment-service
 COPY service-discovery service-discovery
 COPY user-service user-service
+COPY otel-agent-extension otel-agent-extension
 # Cache mount, not a layer: persists ~/.m2 across builds even when an
 # upstream COPY layer invalidates (any module's source changing busts
 # every other service's Dockerfile cache too, since all 9 modules are

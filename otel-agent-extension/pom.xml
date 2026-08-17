@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.bgm</groupId>
+        <artifactId>eCommerce</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>otel-agent-extension</artifactId>
+    <packaging>jar</packaging>
+
+    <!-- ADR-0064 (doc/adr/ADR-0064-otel-java-agent-for-gateway-proxied-spans.md):
+         a standalone OpenTelemetry Java agent extension, loaded by the
+         agent itself (-Dotel.javaagent.extensions=...) into its own
+         ISOLATED extension classloader — not into the application's
+         classpath at all. Deliberately does not depend on common-lib
+         (which would drag Spring, Jakarta Servlet, Spring Cloud Gateway,
+         etc. into that isolated classloader for no reason and risk
+         classloading conflicts with the agent's own shaded dependencies)
+         — instead re-implements the same small
+         ErrorAlwaysSampledSpanExporter filtering policy from scratch,
+         against only the OTel SDK's own autoconfigure-SPI surface,
+         which is exactly what an agent extension is meant to depend on. -->
+    <dependencies>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-extension-autoconfigure-spi</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-trace</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Same OTel SDK version line the rest of the reactor gets
+                 transitively via Spring Boot's BOM (micrometer-tracing-
+                 bridge-otel) — pinned explicitly here since this module
+                 doesn't depend on that starter itself. -->
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>1.49.0</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <!-- Agent extensions must be self-contained single jars loaded
+                 via -Dotel.javaagent.extensions — this module has no
+                 non-"provided" runtime deps to shade in practice, but
+                 shade-plugin's default jar goal still gives us the
+                 correct plain, uber-jar-shaped output the agent expects
+                 (a jar with our class + META-INF/services SPI file, no
+                 external dependency wiring needed). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

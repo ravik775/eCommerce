@@ -19,6 +19,7 @@ COPY order-service order-service
 COPY payment-service payment-service
 COPY service-discovery service-discovery
 COPY user-service user-service
+COPY otel-agent-extension otel-agent-extension
 RUN --mount=type=cache,target=/root/.m2 \
     chmod +x mvnw && ./mvnw -q -pl config-server -am package -DskipTests -Dassembly.skipAssembly=true
 RUN mkdir -p /workspace/extracted && \
