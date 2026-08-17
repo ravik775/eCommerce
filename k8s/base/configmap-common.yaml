@@ -25,17 +25,18 @@ data:
   SPRING_CONFIG_IMPORT: ""
   EUREKA_CLIENT_ENABLED: "false"
   SPRING_CLOUD_DISCOVERY_ENABLED: "false"
-  # ADR-0058: cold-start CPU-throttling investigation (docker stats
-  # showed all 5 app services pinned near their cgroup CPU limit for
-  # 8+ minutes during a simultaneous 4-service restart, triggering
-  # liveness-probe kills mid-boot). Lazy bean init defers most bean
-  # creation to first use instead of eagerly on startup, cutting the
-  # CPU-bound classloading/context-refresh work that's the actual
-  # bottleneck. Accepted trade-off: first request to a lazily-created
-  # bean pays its init cost — fine for this dev/test cluster; would
-  # need reassessment (e.g. per-service opt-out) before a prod profile
-  # if request-latency-sensitive paths were affected.
-  SPRING_MAIN_LAZY_INITIALIZATION: "true"
+  # ADR-0058 (2026-08-17 16:20 IST — REVERTED, see the ADR's correction
+  # section): tried spring.main.lazy-initialization=true to cut
+  # cold-start CPU work. Broke the entire choreography saga silently —
+  # @KafkaListener beans (InventorySagaConsumer, PaymentSagaConsumer,
+  # OrderSagaConsumer, NotificationEventConsumer) never start consuming
+  # under lazy init, because nothing ever injects/calls them directly to
+  # trigger their lazy creation — a documented Spring Boot gotcha this
+  # wasn't checked against before shipping. Found live: a real order sat
+  # in CREATED forever, inventory-service showed zero Kafka-related log
+  # lines at all post-restart. Reverted entirely rather than attempting
+  # a per-bean @Lazy(false) carve-out under time pressure — the CPU
+  # limit raise (this same ADR) is the fix that's actually proven safe.
   # ADR-0032: orderId added as a separate field, not a correlationId
   # substitute — see CorrelationConstants.MDC_ORDER_ID_KEY's Javadoc.
   #
