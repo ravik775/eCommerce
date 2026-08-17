@@ -25,6 +25,17 @@ data:
   SPRING_CONFIG_IMPORT: ""
   EUREKA_CLIENT_ENABLED: "false"
   SPRING_CLOUD_DISCOVERY_ENABLED: "false"
+  # ADR-0058: cold-start CPU-throttling investigation (docker stats
+  # showed all 5 app services pinned near their cgroup CPU limit for
+  # 8+ minutes during a simultaneous 4-service restart, triggering
+  # liveness-probe kills mid-boot). Lazy bean init defers most bean
+  # creation to first use instead of eagerly on startup, cutting the
+  # CPU-bound classloading/context-refresh work that's the actual
+  # bottleneck. Accepted trade-off: first request to a lazily-created
+  # bean pays its init cost — fine for this dev/test cluster; would
+  # need reassessment (e.g. per-service opt-out) before a prod profile
+  # if request-latency-sensitive paths were affected.
+  SPRING_MAIN_LAZY_INITIALIZATION: "true"
   # ADR-0032: orderId added as a separate field, not a correlationId
   # substitute — see CorrelationConstants.MDC_ORDER_ID_KEY's Javadoc.
   #

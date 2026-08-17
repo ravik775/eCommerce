@@ -41,7 +41,14 @@ spec:
             - { name: SPIFFE_MTLS_ENABLED, value: "true" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            # ADR-0058: 500m throttled JVM cold-start (classloading/bean
+            # init is CPU-bound) badly enough that liveness killed pods
+            # mid-boot under a multi-service simultaneous restart —
+            # confirmed live via docker stats showing this container
+            # pinned at ~48% of its own limit throughout an 8+ minute
+            # stall. Raised to 1000m; host has 12 CPUs, plenty of headroom
+            # even with all 5 app services raised the same way.
+            limits: { cpu: 1000m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -61,8 +68,15 @@ spec:
             periodSeconds: 10
           livenessProbe:
             tcpSocket: { port: 8082 }
-            initialDelaySeconds: 220
-            periodSeconds: 15
+            # ADR-0058: widened alongside the CPU limit raise — a
+            # genuinely-progressing-but-slow startup under host resource
+            # pressure was being killed and forced to restart from zero,
+            # amplifying the very slowness it was reacting to.
+            # failureThreshold explicit (was defaulting to 3): now
+            # tolerates up to 300 + 5*20 = 400s before giving up.
+            initialDelaySeconds: 300
+            periodSeconds: 20
+            failureThreshold: 5
       volumes:
         - name: tmp
           emptyDir: {}

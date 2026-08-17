@@ -22,7 +22,7 @@ Checked whether the same applies to RabbitMQ (`notification-service`'s `Notifica
 
 - `./mvnw -pl notification-service -am test`: `BUILD SUCCESS` — confirms `setObservationEnabled` exists on both types in the Spring AMQP version this project uses (compile-checked, not assumed) and existing tests still pass.
 - Full multi-module suite (`./mvnw test`, all 11 modules): **BUILD SUCCESS**, 07:54 min, no regressions.
-- **Live verification (the part that actually matters)**: after redeploy, place a fresh order, then query Tempo directly for `payment-service`/`inventory-service` spans with `orderId=<N>` and for `notification-service`'s `NotificationDispatchWorker` span — confirming real spans now exist where none did before, not just that the config was applied.
+- **Live verification — confirmed working**: placed order 78 (force-traced) after redeploy. `curl -G .../api/search 'q={resource.service.name="inventory-service" && span.orderId="78"}'` and the same for `payment-service` **both returned real trace IDs** (`40bab84b0f513e9e797353632f13e5c1` and `7964bbe000913d990f286abf9e8540eb` respectively) — something that returned empty for every prior order tested (74, 76, 77) before this fix. The gap is genuinely closed for Kafka-triggered spans.
 
 ## Consequences
 

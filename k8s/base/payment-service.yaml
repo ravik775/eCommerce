@@ -48,7 +48,9 @@ spec:
             - { name: KEYCLOAK_TOKEN_URI, value: "http://host.docker.internal:8090/realms/ecom/protocol/openid-connect/token" }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            # ADR-0058: see order-service.yaml's identical comment — same
+            # CPU-throttling-during-cold-start finding applies uniformly.
+            limits: { cpu: 1000m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -68,8 +70,10 @@ spec:
             periodSeconds: 10
           livenessProbe:
             tcpSocket: { port: 8085 }
-            initialDelaySeconds: 220
-            periodSeconds: 15
+            # ADR-0058: see order-service.yaml's identical comment.
+            initialDelaySeconds: 300
+            periodSeconds: 20
+            failureThreshold: 5
       volumes:
         - name: tmp
           emptyDir: {}
