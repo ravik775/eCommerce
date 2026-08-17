@@ -45,9 +45,10 @@ public class PaymentSagaConsumer {
     public void onInventoryReserved(
             String message,
             @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
-            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId,
+            @Header(value = CorrelationConstants.MDC_SPAN_ID_KEY, required = false) String parentSpanId) throws Exception {
         InventoryReservedEvent event = objectMapper.readValue(message, InventoryReservedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId, parentSpanId)) {
             if (processedEventRepository.existsById(event.eventId())) {
                 return;
             }

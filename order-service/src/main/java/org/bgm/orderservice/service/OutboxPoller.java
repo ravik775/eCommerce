@@ -55,6 +55,12 @@ public class OutboxPoller {
                             CorrelationConstants.MDC_TRACE_ID_KEY,
                             event.getTraceId().getBytes(StandardCharsets.UTF_8)));
                 }
+                // ADR-0062: same mechanism as traceId above.
+                if (event.getSpanId() != null) {
+                    record.headers().add(new RecordHeader(
+                            CorrelationConstants.MDC_SPAN_ID_KEY,
+                            event.getSpanId().getBytes(StandardCharsets.UTF_8)));
+                }
                 kafkaTemplate.send(record)
                         .get(); // synchronous ack within this poll tick — simplest correct behavior at this volume
                 event.setPublished(true);

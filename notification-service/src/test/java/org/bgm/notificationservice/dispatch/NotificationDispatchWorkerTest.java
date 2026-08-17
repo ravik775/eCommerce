@@ -53,7 +53,7 @@ class NotificationDispatchWorkerTest {
         NotificationDispatchMessage message =
                 new NotificationDispatchMessage(66, NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION, Instant.now().toString());
 
-        worker.handle(message, "corr-123", "trace-abc");
+        worker.handle(message, "corr-123", "trace-abc", null);
 
         ILoggingEvent event = lastDispatchLogEvent();
         assertEquals("corr-123", event.getMDCPropertyMap().get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
@@ -67,7 +67,7 @@ class NotificationDispatchWorkerTest {
         NotificationDispatchMessage message =
                 new NotificationDispatchMessage(70, NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION, Instant.now().toString());
 
-        worker.handle(message, null, null);
+        worker.handle(message, null, null, null);
 
         ILoggingEvent event = lastDispatchLogEvent();
         // orderId is always set (OrderCorrelationScope.forOrder's own
@@ -88,7 +88,7 @@ class NotificationDispatchWorkerTest {
         NotificationDispatchMessage message =
                 new NotificationDispatchMessage(-1, NotificationDispatchMessage.TYPE_ORDER_CONFIRMATION, Instant.now().toString());
 
-        assertThrows(IllegalStateException.class, () -> worker.handle(message, "corr-1", "trace-1"));
+        assertThrows(IllegalStateException.class, () -> worker.handle(message, "corr-1", "trace-1", null));
 
         // OrderCorrelationScope is try-with-resources — must not leak
         // stale correlation values onto whatever this pooled thread

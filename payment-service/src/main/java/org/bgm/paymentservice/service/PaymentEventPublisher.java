@@ -36,6 +36,9 @@ public class PaymentEventPublisher {
         event.setCorrelationId(MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
         // ADR-0052: same reasoning as correlationId above.
         event.setTraceId(MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY));
+        // ADR-0062: forwarded unchanged — see InventoryEventPublisher's
+        // equivalent comment; same reasoning applies here.
+        event.setSpanId(MDC.get(CorrelationConstants.MDC_SPAN_ID_KEY));
         try {
             event.setPayload(objectMapper.writeValueAsString(payload));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {

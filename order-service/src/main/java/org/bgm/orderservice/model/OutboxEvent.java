@@ -44,4 +44,11 @@ public class OutboxEvent {
     // Javadoc for why this flows across the async saga even though the
     // real OTel span tree doesn't.
     private String traceId;
+
+    // ADR-0062: the real OTel span ID of the request that created this
+    // row — order-service is always the saga's root, so this is always
+    // a fresh live capture here (never forwarded from elsewhere), and
+    // every downstream service just carries it forward unchanged. See
+    // CorrelationConstants.MDC_SPAN_ID_KEY's Javadoc for why.
+    private String spanId;
 }

@@ -36,6 +36,12 @@ public class InventoryEventPublisher {
         event.setCorrelationId(MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY));
         // ADR-0052: same reasoning as correlationId above.
         event.setTraceId(MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY));
+        // ADR-0062: forwarded unchanged, not re-captured — this
+        // service is always a downstream saga hop, never the root, so
+        // MDC already holds order-service's originating span ID
+        // (restored here by OrderCorrelationScope from the consumed
+        // event's own header).
+        event.setSpanId(MDC.get(CorrelationConstants.MDC_SPAN_ID_KEY));
         try {
             event.setPayload(objectMapper.writeValueAsString(payload));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {

@@ -37,8 +37,9 @@ public class NotificationDispatchWorker {
     public void handle(
             NotificationDispatchMessage message,
             @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
-            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) {
-        try (var ignored = OrderCorrelationScope.forOrder(message.orderId(), correlationId, traceId)) {
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId,
+            @Header(value = CorrelationConstants.MDC_SPAN_ID_KEY, required = false) String parentSpanId) {
+        try (var ignored = OrderCorrelationScope.forOrder(message.orderId(), correlationId, traceId, parentSpanId)) {
             if (message.orderId() < 0) {
                 throw new IllegalStateException(
                         "Simulated permanent dispatch failure for order " + message.orderId() + " (test hook)");

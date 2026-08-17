@@ -61,7 +61,7 @@ class NotificationEventConsumerTest {
     void onPaymentSuccessCarriesCorrelationContextAsRabbitMessageHeaders() throws Exception {
         String json = new ObjectMapper().writeValueAsString(new PaymentSuccessEvent("evt-1", 66L));
 
-        consumer.onPaymentSuccess(json, "corr-123", "trace-abc");
+        consumer.onPaymentSuccess(json, "corr-123", "trace-abc", null);
 
         MessagePostProcessor postProcessor = capturePostProcessor();
         Message message = new Message(new byte[0], new MessageProperties());
@@ -76,7 +76,7 @@ class NotificationEventConsumerTest {
     void onPaymentFailedCarriesCorrelationContextAsRabbitMessageHeaders() throws Exception {
         String json = new ObjectMapper().writeValueAsString(new PaymentFailedEvent("evt-2", 67L, "declined"));
 
-        consumer.onPaymentFailed(json, "corr-456", "trace-def");
+        consumer.onPaymentFailed(json, "corr-456", "trace-def", null);
 
         MessagePostProcessor postProcessor = capturePostProcessor();
         Message message = new Message(new byte[0], new MessageProperties());
@@ -94,7 +94,7 @@ class NotificationEventConsumerTest {
         // No traceId header on the inbound Kafka message — degrades the
         // same way OrderCorrelationScope itself degrades (traceId simply
         // left unset), not synthesized as a placeholder.
-        consumer.onPaymentSuccess(json, "corr-789", null);
+        consumer.onPaymentSuccess(json, "corr-789", null, null);
 
         MessagePostProcessor postProcessor = capturePostProcessor();
         Message message = new Message(new byte[0], new MessageProperties());

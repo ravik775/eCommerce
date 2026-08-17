@@ -45,14 +45,15 @@ public class NotificationEventConsumer {
     public void onPaymentSuccess(
             String message,
             @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
-            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId,
+            @Header(value = CorrelationConstants.MDC_SPAN_ID_KEY, required = false) String parentSpanId) throws Exception {
         PaymentSuccessEvent event = objectMapper.readValue(message, PaymentSuccessEvent.class);
         // Last hop of the order saga (order-service -> inventory-service ->
         // payment-service already do this) — was missing here, so a
         // saga's log trail went cold right before the notification step,
         // the one place an operator would most want to confirm delivery
         // actually happened for a given order.
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId, parentSpanId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -70,9 +71,10 @@ public class NotificationEventConsumer {
     public void onPaymentFailed(
             String message,
             @Header(value = CorrelationConstants.MDC_CORRELATION_ID_KEY, required = false) String correlationId,
-            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId) throws Exception {
+            @Header(value = CorrelationConstants.MDC_TRACE_ID_KEY, required = false) String traceId,
+            @Header(value = CorrelationConstants.MDC_SPAN_ID_KEY, required = false) String parentSpanId) throws Exception {
         PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId)) {
+        try (var ignored = OrderCorrelationScope.forOrder(event.orderId(), correlationId, traceId, parentSpanId)) {
             if (alreadyProcessed(event.eventId())) {
                 return;
             }
@@ -100,6 +102,8 @@ public class NotificationEventConsumer {
         String correlationId = MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY);
         String orderIdHeader = MDC.get(CorrelationConstants.MDC_ORDER_ID_KEY);
         String appTraceId = MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY);
+        // ADR-0062: same mechanism as appTraceId above.
+        String parentSpanId = MDC.get(CorrelationConstants.MDC_SPAN_ID_KEY);
         rabbitTemplate.convertAndSend(dispatchExchange, dispatchRoutingKey, dispatchMessage, message -> {
             MessageProperties props = message.getMessageProperties();
             if (correlationId != null && !correlationId.isBlank()) {
@@ -110,6 +114,9 @@ public class NotificationEventConsumer {
             }
             if (appTraceId != null && !appTraceId.isBlank()) {
                 props.setHeader(CorrelationConstants.MDC_TRACE_ID_KEY, appTraceId);
+            }
+            if (parentSpanId != null && !parentSpanId.isBlank()) {
+                props.setHeader(CorrelationConstants.MDC_SPAN_ID_KEY, parentSpanId);
             }
             return message;
         });

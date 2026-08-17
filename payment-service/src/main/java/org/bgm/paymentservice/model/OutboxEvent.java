@@ -33,4 +33,7 @@ public class OutboxEvent {
 
     // ADR-0052: see order-service's OutboxEvent for the full rationale.
     private String traceId;
+
+    // ADR-0062: see order-service's OutboxEvent for the full rationale.
+    private String spanId;
 }

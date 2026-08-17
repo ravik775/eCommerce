@@ -40,6 +40,19 @@ public final class CorrelationConstants {
     // line about order #23" is still a genuinely useful, distinct query.
     public static final String MDC_ORDER_ID_KEY = "orderId";
 
+    // ADR-0062: the real OTel span ID of the request/consume invocation
+    // that originated this saga (order-service's HTTP request span,
+    // captured once and forwarded unchanged through every downstream
+    // hop — never re-captured mid-saga). Not printed by the logging
+    // pattern (it's not useful to a human reading logs, unlike the
+    // other three keys) — MDC is reused here purely as the same
+    // proven propagation vehicle (outbox column -> Kafka/Rabbit header
+    // -> MDC restore) already trusted for correlationId/traceId, so
+    // OrderCorrelationScope can link the current span back to it in
+    // one place instead of threading a fifth method parameter through
+    // every publisher/consumer by hand.
+    public static final String MDC_SPAN_ID_KEY = "parentSpanId";
+
     private CorrelationConstants() {
     }
 }

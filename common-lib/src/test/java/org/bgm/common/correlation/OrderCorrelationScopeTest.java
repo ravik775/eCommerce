@@ -104,6 +104,48 @@ class OrderCorrelationScopeTest {
         }
     }
 
+    @Test
+    void addsSpanLinkToOriginWhenValidTraceIdAndParentSpanIdPropagated() {
+        // ADR-0062: 32-hex traceId / 16-hex spanId — genuine OTel ID
+        // shapes, not placeholders, since TraceId.isValid()/SpanId.isValid()
+        // reject anything else (e.g. the "trace-abc" values the other
+        // tests above use, which is why this needs its own real IDs).
+        String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+        String parentSpanId = "00f067aa0ba902b7";
+        SpanData span = runWithinSpan(() -> {
+            try (var ignored = OrderCorrelationScope.forOrder(70L, "corr-999", traceId, parentSpanId)) {
+                // simulates a downstream saga consumer's listener span
+            }
+        });
+
+        assertEquals(1, span.getLinks().size());
+        assertEquals(traceId, span.getLinks().get(0).getSpanContext().getTraceId());
+        assertEquals(parentSpanId, span.getLinks().get(0).getSpanContext().getSpanId());
+    }
+
+    @Test
+    void addsNoSpanLinkWhenParentSpanIdIsAbsent() {
+        SpanData span = runWithinSpan(() -> {
+            try (var ignored = OrderCorrelationScope.forOrder(71L, "corr-111", "4bf92f3577b34da6a3ce929d0e0e4736")) {
+                // an event published before span-link propagation existed
+            }
+        });
+
+        assertEquals(0, span.getLinks().size());
+    }
+
+    @Test
+    void addsNoSpanLinkWhenParentSpanIdIsMalformed() {
+        SpanData span = runWithinSpan(() -> {
+            try (var ignored = OrderCorrelationScope.forOrder(
+                    72L, "corr-222", "4bf92f3577b34da6a3ce929d0e0e4736", "not-a-real-span-id")) {
+                // defensive: a malformed/legacy header value must not crash
+            }
+        });
+
+        assertEquals(0, span.getLinks().size());
+    }
+
     private interface ScopedAction {
         void run();
     }

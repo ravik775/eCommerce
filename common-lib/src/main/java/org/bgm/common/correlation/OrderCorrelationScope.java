@@ -1,6 +1,11 @@
 package org.bgm.common.correlation;
 
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.SpanId;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceId;
+import io.opentelemetry.api.trace.TraceState;
 import org.slf4j.MDC;
 
 /**
@@ -43,11 +48,13 @@ public final class OrderCorrelationScope implements AutoCloseable {
     private final String previousCorrelationId;
     private final String previousOrderId;
     private final String previousTraceId;
+    private final String previousSpanId;
 
-    private OrderCorrelationScope(String previousCorrelationId, String previousOrderId, String previousTraceId) {
+    private OrderCorrelationScope(String previousCorrelationId, String previousOrderId, String previousTraceId, String previousSpanId) {
         this.previousCorrelationId = previousCorrelationId;
         this.previousOrderId = previousOrderId;
         this.previousTraceId = previousTraceId;
+        this.previousSpanId = previousSpanId;
     }
 
     // ADR-0052: overload kept for any caller that predates traceId
@@ -57,10 +64,18 @@ public final class OrderCorrelationScope implements AutoCloseable {
         return forOrder(orderId, correlationId, null);
     }
 
+    // ADR-0062: overload kept for any caller that predates span-link
+    // propagation — degrades to no link, same as an event published
+    // before this ADR shipped would.
     public static OrderCorrelationScope forOrder(long orderId, String correlationId, String traceId) {
+        return forOrder(orderId, correlationId, traceId, null);
+    }
+
+    public static OrderCorrelationScope forOrder(long orderId, String correlationId, String traceId, String parentSpanId) {
         String previousCorrelationId = MDC.get(CorrelationConstants.MDC_CORRELATION_ID_KEY);
         String previousOrderId = MDC.get(CorrelationConstants.MDC_ORDER_ID_KEY);
         String previousTraceId = MDC.get(CorrelationConstants.MDC_TRACE_ID_KEY);
+        String previousSpanId = MDC.get(CorrelationConstants.MDC_SPAN_ID_KEY);
         String resolvedCorrelationId = (correlationId == null || correlationId.isBlank())
                 ? String.valueOf(orderId)
                 : correlationId;
@@ -68,6 +83,9 @@ public final class OrderCorrelationScope implements AutoCloseable {
         MDC.put(CorrelationConstants.MDC_ORDER_ID_KEY, String.valueOf(orderId));
         if (traceId != null && !traceId.isBlank()) {
             MDC.put(CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
+        }
+        if (parentSpanId != null && !parentSpanId.isBlank()) {
+            MDC.put(CorrelationConstants.MDC_SPAN_ID_KEY, parentSpanId);
         }
         // ADR-0056: also stamp the currently active OTel span, not just
         // MDC. Found live, checking Tempo's own tag index directly: every
@@ -92,7 +110,28 @@ public final class OrderCorrelationScope implements AutoCloseable {
         setSpanAttributeIfPresent(span, CorrelationConstants.MDC_CORRELATION_ID_KEY, resolvedCorrelationId);
         setSpanAttributeIfPresent(span, CorrelationConstants.MDC_ORDER_ID_KEY, String.valueOf(orderId));
         setSpanAttributeIfPresent(span, CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
-        return new OrderCorrelationScope(previousCorrelationId, previousOrderId, previousTraceId);
+        // ADR-0062: link this listener's span back to the saga's
+        // originating span (order-service's HTTP request span,
+        // propagated unchanged through every hop — see
+        // CorrelationConstants.MDC_SPAN_ID_KEY's Javadoc). Deliberately
+        // Span.addLink(), not Span.setParent() / a Context-level
+        // parent: a span can only have one parent, but a single
+        // order-created event fans out to multiple independent
+        // consumers (inventory, and later payment/notification), so
+        // there is no single "child" relationship to model — this is
+        // exactly the scenario OpenTelemetry's messaging semantic
+        // conventions document span Links for. addLink() is valid on
+        // an already-started span (no ordering requirement forcing it
+        // to happen before the listener's own auto-instrumented span
+        // was created), so this single shared call site can add the
+        // link regardless of whether Kafka/RabbitMQ observation
+        // (ADR-0057) created a real span or a no-op one is active.
+        if (traceId != null && TraceId.isValid(traceId) && parentSpanId != null && SpanId.isValid(parentSpanId)) {
+            SpanContext remoteOrigin = SpanContext.createFromRemoteParent(
+                    traceId, parentSpanId, TraceFlags.getSampled(), TraceState.getDefault());
+            span.addLink(remoteOrigin);
+        }
+        return new OrderCorrelationScope(previousCorrelationId, previousOrderId, previousTraceId, previousSpanId);
     }
 
     private static void setSpanAttributeIfPresent(Span span, String key, String value) {
@@ -106,6 +145,7 @@ public final class OrderCorrelationScope implements AutoCloseable {
         restore(CorrelationConstants.MDC_CORRELATION_ID_KEY, previousCorrelationId);
         restore(CorrelationConstants.MDC_ORDER_ID_KEY, previousOrderId);
         restore(CorrelationConstants.MDC_TRACE_ID_KEY, previousTraceId);
+        restore(CorrelationConstants.MDC_SPAN_ID_KEY, previousSpanId);
     }
 
     private static void restore(String key, String previousValue) {

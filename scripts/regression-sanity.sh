@@ -401,20 +401,20 @@ check_gateway_overwrites_trace_id() {
 # ---------------------------------------------------------------------------
 # 10. ADR-0055 regression guard: the gateway's returned X-Trace-Id should be
 #     the real OTel trace ID (32 lowercase hex, no dashes), not a UUID
-#     fallback. Found live even after ADR-0055's Mono.defer fix: the
-#     fallback still fires for some requests (root cause not yet fully
-#     resolved — see ADR-0055's Consequences and the live investigation
-#     that surfaced this). WARN, not FAIL, when it does — this is a known,
-#     tracked, currently-open gap, not a silent regression. Only FAILs if
-#     the header is missing or malformed outright.
+#     fallback. Upgraded from WARN to FAIL (2026-08-17 17:45 IST): the
+#     ContextSnapshotFactory correction (ADR-0055's second fix) was
+#     live-verified with 10 real requests, 10/10 valid OTel-format IDs,
+#     zero TRACE_ID_FALLBACK_UUID audit events — this is no longer a
+#     known-accepted gap, so a fallback firing now is a genuine
+#     regression, not expected/tolerated behavior.
 # ---------------------------------------------------------------------------
 check_trace_id_is_real_otel_id() {
   [ -z "$CHECKOUT_TRACE_ID" ] && { echo "no trace ID captured from checkout-saga check"; return 2; }
   if [[ "$CHECKOUT_TRACE_ID" =~ ^[0-9a-f]{32}$ ]]; then
     return 0
   fi
-  echo "X-Trace-Id ($CHECKOUT_TRACE_ID) is a UUID fallback, not a real OTel trace ID — known open gap, see ADR-0055; check Loki for TRACE_ID_FALLBACK_UUID audit events to confirm frequency"
-  return 2
+  echo "X-Trace-Id ($CHECKOUT_TRACE_ID) is a UUID fallback, not a real OTel trace ID — this used to be a known open gap (ADR-0055) but was live-verified fixed (10/10 clean); a fallback now is a genuine regression, check Loki for TRACE_ID_FALLBACK_UUID audit events"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -508,6 +508,74 @@ check_order_trace_dashboard_provisioned() {
 }
 
 # ---------------------------------------------------------------------------
+# 14. ADR-0062 regression guard: inventory-service's span for this order must
+#     carry a real OTel span Link back to order-service's originating
+#     request span — not just a shared appTraceId string (that's ADR-0052/
+#     0056, already covered above). Finds inventory-service's own Tempo
+#     trace for this order via search, fetches that trace's full JSON, and
+#     checks for a non-empty "links" array on some span — a plain string
+#     check (no jq dependency), consistent with the rest of this script.
+#     WARN, not FAIL, if inventory-service has no Tempo trace at all yet
+#     (that's ADR-0056's own still-tracked gap, not this check's job to
+#     re-report).
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 15. ADR-0063 regression guard: the checkout-saga check above always sends
+#     X-Force-Trace: true as admin1 (CAN_TRACE) specifically so this trace
+#     is guaranteed force-exported if the gateway's span exists at all
+#     (ADR-0032/ADR-0048) — reuses CHECKOUT_TRACE_ID rather than placing a
+#     fresh order. Fetches the raw Tempo trace JSON directly (not
+#     /api/search) and checks for a real api-gateway span.
+#     WARN, not FAIL: live investigation (ADR-0063's 18:45 IST correction)
+#     found this is a known, still-open gap — Spring Cloud Gateway's HTTP-
+#     server span for a *proxied* route (anything through
+#     NettyRoutingFilter, i.e. every business route) never completes/
+#     reports to the OTel SDK at all under this project's library-
+#     instrumentation approach, independent of sampling or attribute
+#     correctness. Directly-handled gateway routes (/actuator/prometheus,
+#     /user/me) are unaffected. Fixing this needs the OpenTelemetry Java
+#     agent or manual span wrapping around NettyRoutingFilter's call —
+#     both out of scope for now (see ADR-0063 and ADR-0055's Related
+#     links) — so this WARNs every run until one of those lands, same
+#     treatment as ADR-0056's own tracked gap.
+# ---------------------------------------------------------------------------
+check_gateway_force_trace_span() {
+  [ -z "$CHECKOUT_TRACE_ID" ] && { echo "no trace ID captured from checkout-saga check"; return 2; }
+  local tempo_url="${TEMPO_URL:-http://localhost:3200}"
+  local resp
+  resp="$(curl -s -m 10 "$tempo_url/api/traces/$CHECKOUT_TRACE_ID")"
+  if [[ "$resp" != *'"stringValue":"api-gateway"'* ]]; then
+    echo "trace $CHECKOUT_TRACE_ID (force-traced) has no api-gateway span — known open gap, proxied-route spans don't reach Tempo's exporter (ADR-0063's correction)"
+    return 2
+  fi
+  return 0
+}
+
+check_span_link_present() {
+  [ -z "$CHECKOUT_ORDER_ID" ] && { echo "no order from checkout-saga check to check"; return 2; }
+  local tempo_url="${TEMPO_URL:-http://localhost:3200}"
+  local start_s end_s resp trace_id
+  start_s=$(( $(date +%s) - 300 ))
+  end_s=$(( $(date +%s) + 60 ))
+  resp="$(curl -s -m 10 -G "$tempo_url/api/search" \
+    --data-urlencode "q={resource.service.name=\"inventory-service\" && span.orderId=\"$CHECKOUT_ORDER_ID\"}" \
+    --data-urlencode "start=$start_s" --data-urlencode "end=$end_s" --data-urlencode "limit=1")"
+  if [[ "$resp" != *'"traceID"'* ]]; then
+    echo "inventory-service has no Tempo trace for orderId=$CHECKOUT_ORDER_ID yet — known open gap (ADR-0056), skipping span-link check"
+    return 2
+  fi
+  trace_id="$(echo "$resp" | grep -o '"traceID":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  [ -z "$trace_id" ] && { echo "could not parse traceID from Tempo search response"; return 2; }
+  resp="$(curl -s -m 10 "$tempo_url/api/traces/$trace_id")"
+  if [[ "$resp" != *'"links"'* ]]; then
+    echo "inventory-service trace $trace_id has no span links — is inventory-service running the ADR-0062+ image?"
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Run everything
 # ---------------------------------------------------------------------------
 log "target: gateway=$GATEWAY_URL keycloak=$KEYCLOAK_URL namespace=$NAMESPACE"
@@ -532,6 +600,8 @@ run_check "X-Trace-Id is a real OTel trace ID (ADR-0055)"            check_trace
 run_check "Tempo span attributes present per service (ADR-0056)"     check_tempo_span_attributes
 run_check "Inventory reservation audit log present (ADR-0059)"       check_inventory_reserved_audit_log
 run_check "Order Trace Explorer dashboard provisioned (ADR-0061)"    check_order_trace_dashboard_provisioned
+run_check "Inventory-service span links back to order origin (ADR-0062)" check_span_link_present
+run_check "Gateway's own span force-exported for X-Force-Trace (ADR-0063)" check_gateway_force_trace_span
 
 echo
 echo "=== Summary ==="

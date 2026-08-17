@@ -160,7 +160,19 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         // this the true exception path instead of a frequent silent
         // occurrence; still never propagate a meaningless ID if it
         // somehow does.
-        String otelTraceId = Span.current().getSpanContext().getTraceId();
+        // ADR-0063 (2026-08-17 correction): captured once, here, at the
+        // one point in this method proven reliable (same place traceId
+        // itself is read, live-verified 10/10 clean by ADR-0055) — held
+        // as a direct object reference so the async force-trace branch
+        // below can call .setAttribute() on the actual Span instance
+        // without needing Span.current() to resolve correctly again
+        // later. See that branch's own comment for why re-reading
+        // Span.current() asynchronously was still unreliable even after
+        // the first ADR-0063 fix attempt (re-deferring ContextSnapshot),
+        // and why holding the reference directly sidesteps the whole
+        // ambient-context-timing question instead of just relocating it.
+        Span gatewaySpan = Span.current();
+        String otelTraceId = gatewaySpan.getSpanContext().getTraceId();
         boolean otelTraceIdValid = io.opentelemetry.api.trace.TraceId.isValid(otelTraceId);
         String traceId = otelTraceIdValid ? otelTraceId : UUID.randomUUID().toString();
         if (!otelTraceIdValid) {
@@ -190,8 +202,8 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         // NOT set here — the gateway never learns it; order-service
         // assigns it after this span has already started.
         if (otelTraceIdValid) {
-            Span.current().setAttribute(CorrelationConstants.MDC_CORRELATION_ID_KEY, correlationId);
-            Span.current().setAttribute(CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
+            gatewaySpan.setAttribute(CorrelationConstants.MDC_CORRELATION_ID_KEY, correlationId);
+            gatewaySpan.setAttribute(CorrelationConstants.MDC_TRACE_ID_KEY, traceId);
         }
 
         ServerHttpRequest.Builder requestBuilder = request.mutate()
@@ -252,11 +264,37 @@ public class CorrelationTraceGatewayFilter implements GlobalFilter, Ordered {
         if (!"true".equalsIgnoreCase(request.getHeaders().getFirst("X-Force-Trace"))) {
             return proceed;
         }
+        // ADR-0063 (2026-08-17, original fix attempt): re-deferring a
+        // fresh ContextSnapshot here (matching ADR-0055's pattern
+        // exactly) was NOT enough — live-verified via raw Tempo trace
+        // JSON: only 1 of 3 force-traced requests actually got an
+        // api-gateway span exported, the other 2 traces genuinely had
+        // no api-gateway span at all (not a query-timing artifact —
+        // their order-service spans were present and queryable). So
+        // re-reading Span.current() asynchronously, even inside a fresh
+        // deferContextual, is still not reliably the same span this
+        // request's HTTP-server instrumentation will actually export —
+        // evidently something about how ReactiveSecurityContextHolder's
+        // own Mono composes Reactor Context doesn't guarantee the OTel
+        // Context accessor survives that specific hop the same way it
+        // survives the outer filter()'s hop.
+        //
+        // ADR-0063 (2026-08-17 correction): sidesteps the question
+        // entirely instead of chasing it further — gatewaySpan (captured
+        // above, at the one point in this method already proven
+        // reliable) is a direct reference to the actual Span object, not
+        // a lookup that depends on ambient context being correct at call
+        // time. Calling .setAttribute() on it here is a plain method
+        // call on a still-open span (it can't have ended yet — nothing
+        // downstream of this point, including the proceed chain, has
+        // run), independent of whatever Reactor Context is or isn't
+        // active on whatever thread this async callback happens to run
+        // on.
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .doOnNext(authentication -> {
                     if (callerHasCanTraceRole(authentication)) {
-                        Span.current().setAttribute(ErrorAlwaysSampledSpanExporter.FORCE_TRACE_ATTRIBUTE, true);
+                        gatewaySpan.setAttribute(ErrorAlwaysSampledSpanExporter.FORCE_TRACE_ATTRIBUTE, true);
                     } else {
                         auditDenied(authentication, exchange);
                     }
